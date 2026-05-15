@@ -58,7 +58,7 @@ if uploaded_file:
             ud_valor = str(fila.get(col_ud, '')).strip()
             tipo_concepto = str(fila.get(df.columns[1], '')).strip()
             
-            # Filtrar capítulos y títulos (solo procesar lo que tenga unidades reales)
+            # Filtrar capítulos y títulos
             if pd.isna(fila.get(col_ud)) or "capítulo" in tipo_concepto.lower() or "capítulo" in ud_valor.lower() or ud_valor == "None" or ud_valor == "":
                 continue
             
@@ -73,29 +73,33 @@ if uploaded_file:
             if not codigo or codigo == "None" or len(codigo) < 2:
                 continue
 
-            # Cortar la descripción original para que no ocupe todo el Excel (primeras 50 letras o primera línea)
             descripcion_corta = resumen.split('\n')[0][:60]
             if len(resumen) > 60:
                 descripcion_corta += "..."
 
-            # Inicializar columnas de precios solicitadas
             p_ive_col = "—"
             p_cype_col = "—"
             p_comercial_col = "—"
             marca_comercial_col = "—"
             val_texto = ""
 
-            # 1. PASO: BUSCAR EN IVE
+            # 1. PASO: BUSCAR EN IVE (Prioridad absoluta)
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]} €"
                 desviacion = abs(precio_presu - precios_ive[codigo])
                 val_texto = "🟢 IVE OK" if desviacion < 0.05 else "🔴 DESVIADO DE IVE"
             
-            # 2. PASO: SI NO ESTÁ EN IVE, BUSCAR EN CYPE
+            # 2. PASO: BUSCAR EN LA BASE DE CYPE
             elif codigo in precios_cype:
                 p_cype_col = f"{precios_cype[codigo]} €"
                 desviacion = abs(precio_presu - precios_cype[codigo])
                 val_texto = "🟢 CYPE OK" if desviacion < 0.05 else "🔴 DESVIADO DE CYPE"
+            
+            # DETECTAR SI TIENE FORMATO CYPE AUNQUE NO ESTÉ EN NUESTRA BASE CORTA
+            elif any(c in codigo for c in [".", "-", "IEE", "DPT", "IEEL"]) or len(codigo) > 7:
+                p_cype_col = "Verificar Generador de Precios"
+                val_texto = "🔍 ESTRUCTURA CYPE (REVISAR BANCO CYPE)"
+                marca_comercial_col = "Procedencia: CYPE Ingenieros"
             
             # 3. PASO: CASO 4 - MERCADO COMERCIAL
             else:
@@ -111,8 +115,8 @@ if uploaded_file:
                         break
                 
                 if not comercial_encontrado:
-                    val_texto = "🟡 CÓDIGO DESCONOCIDO"
-                    marca_comercial_col = "Revisar catálogo específico"
+                    val_texto = "🟡 REVISAR MANUALMENTE"
+                    marca_comercial_col = "No coincide con patrones conocidos"
 
             resultados.append({
                 "Código": codigo,
@@ -128,7 +132,7 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Análisis finalizado con descripciones incluidas.")
+            st.success("✅ Sistema de rastreo CYPE activado.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -138,11 +142,11 @@ if uploaded_file:
             st.download_button(
                 label="📥 DESCARGAR INFORME EXCEL (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Precios_Descriptivo.xlsx",
+                file_name="Informe_Precios_Filtrado_CYPE.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas válidas para analizar.")
+            st.warning("No se encontraron partidas válidas.")
             
     except Exception as e:
         st.error(f"Error general en la ejecución: {e}")
