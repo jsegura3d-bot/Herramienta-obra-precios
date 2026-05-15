@@ -58,7 +58,7 @@ if uploaded_file:
             ud_valor = str(fila.get(col_ud, '')).strip()
             tipo_concepto = str(fila.get(df.columns[1], '')).strip()
             
-            # Filtrar capítulos y títulos
+            # Filtrar capítulos y títulos (solo procesar lo que tenga unidades reales)
             if pd.isna(fila.get(col_ud)) or "capítulo" in tipo_concepto.lower() or "capítulo" in ud_valor.lower() or ud_valor == "None" or ud_valor == "":
                 continue
             
@@ -73,7 +73,12 @@ if uploaded_file:
             if not codigo or codigo == "None" or len(codigo) < 2:
                 continue
 
-            # Columnas limpias que me pediste
+            # Cortar la descripción original para que no ocupe todo el Excel (primeras 50 letras o primera línea)
+            descripcion_corta = resumen.split('\n')[0][:60]
+            if len(resumen) > 60:
+                descripcion_corta += "..."
+
+            # Inicializar columnas de precios solicitadas
             p_ive_col = "—"
             p_cype_col = "—"
             p_comercial_col = "—"
@@ -106,11 +111,12 @@ if uploaded_file:
                         break
                 
                 if not comercial_encontrado:
-                    val_texto = "🟡 CÓDIGO DESCONOCIDO / REVISAR MANUALMENTE"
-                    marca_comercial_col = "Revisar catálogo comercial específico"
+                    val_texto = "🟡 CÓDIGO DESCONOCIDO"
+                    marca_comercial_col = "Revisar catálogo específico"
 
             resultados.append({
                 "Código": codigo,
+                "Descripción Corta": descripcion_corta,
                 "Unidad": ud_valor,
                 "Precio Presu": f"{precio_presu} €",
                 "Precio IVE": p_ive_col,
@@ -122,7 +128,7 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Análisis finalizado sin errores de estructura.")
+            st.success("✅ Análisis finalizado con descripciones incluidas.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
@@ -132,11 +138,11 @@ if uploaded_file:
             st.download_button(
                 label="📥 DESCARGAR INFORME EXCEL (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Precios_IVE_CYPE_Comercial.xlsx",
+                file_name="Informe_Precios_Descriptivo.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas con unidades válidas para analizar.")
+            st.warning("No se encontraron partidas válidas para analizar.")
             
     except Exception as e:
         st.error(f"Error general en la ejecución: {e}")
