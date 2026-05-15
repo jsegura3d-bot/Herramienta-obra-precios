@@ -1,79 +1,52 @@
 import streamlit as st
 import pandas as pd
-import urllib.parse
 
-# --- SIMULACIÓN DE BASES DE DATOS (Aquí cargarás tus archivos reales luego) ---
-BDC25_IVE = {
-    "0AF010": 73.12,
-    "DRT030": 8.91,
-    "PIEM10cb": 115.20
-}
-
-CYPE_BASE = {
-    "IEEL.1db": 1.45
-}
-
-def analizar_presupuesto(df):
-    def aplicar_logica(row):
-        codigo = str(row['Código']).strip()
-        resumen = str(row['Resumen']).lower()
-        precio_pres = row['Pres']
-
-        # CASO 4: CÓDIGOS COMBINADOS (con guion)
-        if "-" in codigo:
-            partes = codigo.split("-")
-            suma_ive = 0
-            encontrados = 0
-            for p in partes:
-                if p in BDC25_IVE:
-                    suma_ive += BDC25_IVE[p]
-                    encontrados += 1
-            if encontrados > 0:
-                return f"(ok: SUMA IVE {suma_ive}€)" if abs(precio_pres - suma_ive) < 0.5 else f"(PRECIO IVE SUMADO: {suma_ive}€)"
-
-        # CASO 1 y 2: IVE
-        if codigo in BDC25_IVE:
-            p_ive = BDC25_IVE[codigo]
-            if abs(precio_pres - p_ive) < 0.1: # Margen de 10 céntimos
-                return "(ok) 🟢"
-            else:
-                return f"(PRECIO IVE: {p_ive}€) 🔴"
-
-        # CASO 3: CYPE
-        if codigo in CYPE_BASE:
-            p_cype = CYPE_BASE[codigo]
-            p_ive_sim = BDC25_IVE.get(codigo, "No en IVE")
-            return f"[CYPE: {p_cype}€] [IVE: {p_ive_sim}€] 🟠"
-
-        # CASO 4: COMERCIAL / INVENTADO / APARATOS
-        palabras_aparatos = ["bomba", "ascensor", "inversor", "clima", "equipo", "grupo"]
-        if any(palabra in resumen for palabra in palabras_aparatos):
-            query = urllib.parse.quote(f"precio comercial {resumen}")
-            link = f"https://www.google.com/search?q={query}"
-            return f"(BUSCAR WEB: {resumen}) 🟣"
-
-        return "(Revisar manualmente) ⚪"
-
-    # Aplicar la función a cada fila
-    df['Valoración'] = df.apply(aplicar_logica, axis=1)
-    return df
-
-# --- INTERFAZ DE USUARIO (Streamlit) ---
 st.title("🛠️ Revisor de Instalaciones (IVE BDC25)")
-st.write("Sube tu Excel (Hoja5) y obtén la valoración automática.")
+st.write("Sube tu Excel y añadiré la valoración a la derecha.")
+
+# Base de datos de prueba
+precios_ive = {"0AF010": 73.12, "DRT030": 8.91, "PIEM10cb": 115.20}
 
 uploaded_file = st.file_uploader("Elige tu archivo Excel", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, sheet_name='Hoja5')
-    # Limpiamos filas vacías de códigos
-    df = df.dropna(subset=['Código'])
-    
-    with st.spinner('Analizando precios...'):
-        df_final = analizar_presupuesto(df)
-        st.success("¡Análisis completado!")
-        st.dataframe(df_final) # Muestra la tabla en la web
+    try:
+        # Intentamos leer la Hoja5, si no existe, leemos la primera
+        try:
+            df = pd.read_excel(uploaded_file, sheet_name='Hoja5')
+        except:
+            df = pd.read_excel(uploaded_file)
         
-        # Botón para descargar
-        csv = df_final.to_csv(index=False).encode('utf-8')
-        st.download_button("Descargar Excel Valorado", csv, "presupuesto_revisado.csv", "text/csv")
+        # BUSCADOR DE COLUMNAS (Para que no de error si cambia una letra o tilde)
+        col_codigo = next((c for c in df.columns if "cod" in c.lower()), None)
+        col_pres = next((c for c in df.columns if "pres" in c.lower()), None)
+        col_resumen = next((c for c in df.columns if "res" in c.lower() or "desc" in c.lower()), None)
+
+        if col_codigo and col_pres:
+            def valorar(fila):
+                cod = str(fila[col_codigo]).strip()
+                p_presu = fila[col_pres]
+                if cod in precios_ive:
+                    p_oficial = precios_ive[cod]
+                    return f"(ok) 🟢" if abs(p_presu - p_oficial) < 0.1 else f"(IVE: {p_oficial}€) 🔴"
+                return "(Revisar / Comercial) ⚪"
+
+            df['VALORACIÓN FINAL'] = df.apply(valorar, axis=1)
+            
+            st.success("¡Análisis listo!")
+            st.dataframe(df)
+            
+            # EL INFORME EN EXCEL (Lo que querías)
+            # Usamos formato CSV para que sea descarga directa y fácil
+            csv = df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 DESCARGAR EXCEL CON VALORACIONES",
+                data=csv,
+                file_name="informe_precios_revisado.csv",
+                mime="text/csv",
+            )
+        else:
+            st.error(f"No encuentro las columnas necesarias. Tu Excel tiene: {list(df.columns)}")
+            
+    except Exception as e:
+        st.error(f"Error al leer el archivo: {e}")
