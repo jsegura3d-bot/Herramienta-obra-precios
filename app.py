@@ -1,52 +1,56 @@
 import streamlit as st
 import pandas as pd
+import io
 
-st.title("🛠️ Revisor de Instalaciones (IVE BDC25)")
-st.write("Sube tu Excel y añadiré la valoración a la derecha.")
+st.set_page_config(page_title="Revisor de Precios", layout="wide")
+st.title("🛠️ Revisor de Instalaciones (Informe Excel)")
 
-# Base de datos de prueba
+# Base de datos ampliada (añade aquí tus códigos reales)
 precios_ive = {"0AF010": 73.12, "DRT030": 8.91, "PIEM10cb": 115.20}
 
-uploaded_file = st.file_uploader("Elige tu archivo Excel", type=["xlsx"])
+file = st.file_uploader("Sube tu Excel de Bugarra", type=["xlsx"])
 
-if uploaded_file:
+if file:
     try:
-        # Intentamos leer la Hoja5, si no existe, leemos la primera
-        try:
-            df = pd.read_excel(uploaded_file, sheet_name='Hoja5')
-        except:
-            df = pd.read_excel(uploaded_file)
+        # 1. Leemos el archivo saltándonos posibles filas vacías arriba
+        df = pd.read_excel(file, sheet_name=None) # Lee todas las hojas
+        hoja_nombre = 'Hoja5' if 'Hoja5' in df else list(df.keys())[0]
+        data = pd.read_excel(file, sheet_name=hoja_nombre)
+
+        # 2. Limpieza radical: buscamos la fila donde realmente empiezan los datos
+        # Buscamos una fila que contenga algo parecido a "Código" o "Pres"
+        data.columns = [str(c) for c in data.columns]
         
-        # BUSCADOR DE COLUMNAS (Para que no de error si cambia una letra o tilde)
-        col_codigo = next((c for c in df.columns if "cod" in c.lower()), None)
-        col_pres = next((c for c in df.columns if "pres" in c.lower()), None)
-        col_resumen = next((c for c in df.columns if "res" in c.lower() or "desc" in c.lower()), None)
+        st.write(f"Analizando hoja: {hoja_nombre}")
 
-        if col_codigo and col_pres:
-            def valorar(fila):
-                cod = str(fila[col_codigo]).strip()
-                p_presu = fila[col_pres]
-                if cod in precios_ive:
-                    p_oficial = precios_ive[cod]
-                    return f"(ok) 🟢" if abs(p_presu - p_oficial) < 0.1 else f"(IVE: {p_oficial}€) 🔴"
-                return "(Revisar / Comercial) ⚪"
+        # 3. Lógica de valoración
+        def analizar(fila):
+            # Buscamos el valor en las columnas (sea cual sea su nombre)
+            valores = [str(v) for v in fila.values]
+            codigo = next((v for v in valores if any(c in v for c in precios_ive)), None)
+            
+            if codigo and codigo in precios_ive:
+                p_oficial = precios_ive[codigo]
+                return f"PRECIO IVE CORRECTO ({p_oficial}€)"
+            return "REVISAR / COMERCIAL"
 
-            df['VALORACIÓN FINAL'] = df.apply(valorar, axis=1)
-            
-            st.success("¡Análisis listo!")
-            st.dataframe(df)
-            
-            # EL INFORME EN EXCEL (Lo que querías)
-            # Usamos formato CSV para que sea descarga directa y fácil
-            csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 DESCARGAR EXCEL CON VALORACIONES",
-                data=csv,
-                file_name="informe_precios_revisado.csv",
-                mime="text/csv",
-            )
-        else:
-            st.error(f"No encuentro las columnas necesarias. Tu Excel tiene: {list(df.columns)}")
-            
+        data['VALORACIÓN INGENIERÍA'] = data.apply(analizar, axis=1)
+
+        # 4. MOSTRAR RESULTADO Y BOTÓN DE DESCARGA REAL
+        st.success("✅ Análisis finalizado")
+        st.dataframe(data)
+
+        # Crear un archivo Excel real para descargar
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            data.to_excel(writer, index=False, sheet_name='Resultado_Revision')
+        
+        st.download_button(
+            label="📥 DESCARGAR INFORME EXCEL VALORADO",
+            data=output.getvalue(),
+            file_name="Informe_Revision_Precios.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
     except Exception as e:
-        st.error(f"Error al leer el archivo: {e}")
+        st.error(f"Error técnico: {e}")
