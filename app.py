@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import io
+import openpyxl
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
 st.title("🛠️ Revisor de Precios Pro - Cruce Total (CYPE vs IVE Valencia)")
-st.caption("Configuración activa: Base IVE (Valencia Julio 2025) + CYPE con comparativa cruzada obligatoria en todas las filas")
+st.caption("Configuración activa: Inyección de columna IA manteniendo el formato y estructura original del Excel cargado")
 
 # --- BANCO DE PRECIOS INTEGRADO IVE (VALENCIA - JULIO 2025) ---
 precios_ive = {
@@ -72,136 +73,118 @@ uploaded_file = st.file_uploader("Sube tu Excel de Bugarra", type=["xlsx"])
 
 if uploaded_file:
     try:
-        try:
-            df = pd.read_excel(uploaded_file, sheet_name='Hoja5')
-        except:
-            df = pd.read_excel(uploaded_file)
+        # 1. LEER EL ARCHIVO CON OPENPYXL PARA NO PERDER EL FORMATO ORIGINAL
+        file_bytes = uploaded_file.read()
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
         
-        df.columns = [str(c).strip() for c in df.columns]
-        
-        col_codigo = next((c for c in df.columns if "cod" in c.lower() or c == "Presupuesto" or "unnamed: 0" in c.lower()), df.columns[0])
-        col_ud = next((c for c in df.columns if "ud" in c.lower() or "nat" in c.lower() or "unnamed: 2" in c.lower()), None)
-        col_resumen = next((c for c in df.columns if "res" in c.lower() or "desc" in c.lower() or "unnamed: 3" in c.lower()), None)
-        col_pres = next((c for c in df.columns if ("pres" in c.lower() or "imp" in c.lower() or "prec" in c.lower()) and "can" not in c.lower() or "unnamed: 5" in c.lower()), None)
-
-        resultados = []
-
-        for index, fila in df.iterrows():
-            codigo = str(fila.get(col_codigo, '')).strip()
-            resumen = str(fila.get(col_resumen, '')).strip() if col_resumen else ""
+        # Seleccionamos 'Hoja5' si existe, o la primera por defecto
+        if 'Hoja5' in wb.sheetnames:
+            ws = wb['Hoja5']
+        else:
+            ws = wb.active
             
-            if pd.isna(fila.get(col_codigo)) or codigo == "" or codigo.lower() == "none" or codigo.lower() == "código" or "capítulo" in codigo.lower() or "total" in resumen.lower():
+        # Convertimos temporalmente a DataFrame solo para localizar las columnas usando la lógica inteligente
+        df_temp = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ws.title)
+        df_temp.columns = [str(c).strip() for c in df_temp.columns]
+        
+        col_codigo_idx = next((i for i, c in enumerate(df_temp.columns) if "cod" in c.lower() or c == "Presupuesto" or "unnamed: 0" in c.lower()), 0)
+        col_resumen_idx = next((i for i, c in enumerate(df_temp.columns) if "res" in c.lower() or "desc" in c.lower() or "unnamed: 3" in c.lower()), 2)
+        col_pres_idx = next((i for i, c in enumerate(df_temp.columns) if ("pres" in c.lower() or "imp" in c.lower() or "prec" in c.lower()) and "can" not in c.lower() or "unnamed: 5" in c.lower()), 4)
+
+        # Añadimos la cabecera en la columna final disponible de la fila 1
+        col_ia_destino = ws.max_column + 1
+        ws.cell(row=1, column=col_ia_destino, value="COLUMNA IA (REVISIÓN DE MÁRGENES VALENCIA)").font = openpyxl.styles.Font(bold=True, color="0000FF")
+
+        # Visualización de datos procesados en la web
+        resultados_vista = []
+
+        # 2. ESCANEAR FILA A FILA E INYECTAR LA INFO
+        # Empezamos en la fila 2 para saltarnos las cabeceras
+        for row_idx in range(2, ws.max_row + 1):
+            codigo = str(ws.cell(row=row_idx, column=col_codigo_idx + 1).value or '').strip()
+            resumen = str(ws.cell(row=row_idx, column=col_resumen_idx + 1).value or '').strip()
+            
+            if codigo == "" or codigo.lower() == "none" or codigo.lower() == "código" or "capítulo" in codigo.lower() or "total" in resumen.lower():
                 continue
                 
-            ud_valor = str(fila.get(col_ud, '')).strip() if col_ud else "ud"
-            
-            try: 
-                precio_presu = float(fila.get(col_pres, 0))
-            except: 
+            try:
+                precio_presu = float(ws.cell(row=row_idx, column=col_pres_idx + 1).value or 0.0)
+            except:
                 precio_presu = 0.0
 
-            if len(codigo) < 2: continue
-
-            descripcion_corta = resumen.split('\n')[0][:60]
-            if len(resumen) > 60: descripcion_corta += "..."
-
-            nuevo_codigo_ive = "—"
-            p_ive_col = "—"
-            nuevo_codigo_cype = "—"
-            p_cype_col = "—"
-            p_comercial_col = "—"
-            marca_comercial_col = "—"
+            p_ive_col, p_cype_col, p_comercial_col = "—", "—", "—"
             val_texto = ""
 
             texto_analisis = (codigo + " " + resumen).lower()
             es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led", "emergencia", "aerotermia"])
 
-            # 1. EVALUACIÓN DE ENTRADA DIRECTA EN IVE
+            # Análisis de Base Directa IVE
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
-                nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
                 if precio_presu <= precios_ive[codigo]['precio']:
-                    val_texto = "🟢 IVE DIRECTO OK (Precio cubierto)"
+                    val_texto = f"🟢 IVE OK. Presupuesto cubierto ({p_ive_col})."
                 else:
-                    val_texto = f"🔴 ALERTA: PRESUPUESTO SUPERA IVE ({precios_ive[codigo]['precio']} €)"
+                    val_texto = f"🔴 ALERTA: PRESUPUESTO SUPERA AL IVE ({p_ive_col})."
             
-            # 2. EVALUACIÓN EN RADAR COMERCIAL
+            # Análisis Comercial
             elif es_aparato_maquina and "aerotermia" not in texto_analisis and "daisa" not in texto_analisis:
-                comercial_encontrado = False
                 for palabra, info in cat_comercial.items():
                     if palabra in texto_analisis:
                         p_comercial_col = info["precio"]
-                        marca_comercial_col = info["marca"]
-                        val_texto = "🟣 EQUIPO COMERCIAL (RADAR GOOGLE)"
-                        comercial_encontrado = True
+                        val_texto = f"🟣 EQUIPO COMERCIAL. Rango estimado: {p_comercial_col} (Marca: {info['marca']})."
                         break
-                if not comercial_encontrado:
-                    p_comercial_col = "Consultar según Potencia"
-                    marca_comercial_col = "Fabricantes autorizados"
-                    val_texto = "🟣 EQUIPO COMERCIAL ESPECIAL"
+                if not val_texto:
+                    val_texto = "🟣 EQUIPO COMERCIAL ESPECIAL (Consultar según potencia)."
 
-            # 3. EVALUACIÓN EN CYPE + BUSQUEDA EN PARALELO DE POSIBLE IVE (¡TU MEJORA SOLICITADA!)
+            # Análisis de CYPE
             else:
                 precio_cype_est, cod_cype_oficial, ref_cype = mapear_y_estimar_cype(codigo, resumen, precio_presu)
                 if precio_cype_est is not None:
                     p_cype_col = f"{precio_cype_est} €"
-                    nuevo_codigo_cype = cod_cype_oficial
-                    marca_comercial_col = f"Banco: {ref_cype}"
-                    
                     if precio_presu >= precio_cype_est:
-                        val_texto = "🟢 CYPE OK (Margen seguro)"
+                        val_texto = f"🟢 CYPE OK (Margen seguro vs base de {p_cype_col})."
                     else:
-                        val_texto = "🟢 CYPE OK (Precio cubierto por base)"
+                        val_texto = f"🟢 CYPE OK (Precio cubierto por base de {p_cype_col})."
                 else:
-                    val_texto = "🔍 REVISAR MANUALMENTE"
-                    marca_comercial_col = "Fuera de rango estructurado"
+                    val_texto = "🔍 REVISAR MANUALMENTE."
 
-            # --- 🔍 MOTOR DE COMPARATIVA OBLIGATORIA CON IVE VALENCIA (¡SIEMPRE COMPARA!) ---
-            # Aunque la partida se catalogue en CYPE o Comercial, si encuentra palabra clave en el IVE te saca TODA la info
+            # --- RASTREO DE MARGEN EXTRA CON IVE VALENCIA ---
             for cod_ive_ref, info_ive in precios_ive.items():
                 if any(kw in texto_analisis for kw in info_ive["keywords"]):
-                    nuevo_codigo_ive = info_ive['codigo_oficial']
                     p_ive_col = f"{info_ive['precio']} €"
-                    
-                    # Añadimos nota informativa de seguridad en la valoración si estamos comparando CYPE vs IVE
-                    if p_cype_col != "—":
-                        if info_ive["precio"] >= precio_presu:
-                            val_texto += f" | 🔵 IVE DISPONIBLE COMPARATIVO: {info_ive['precio']} € (¡Mejor precio!)"
-                        else:
-                            val_texto += " | ⚠️ IVE disponible pero es más bajo"
+                    if info_ive["precio"] > precio_presu:
+                        val_texto = f"🔵 RECOMENDADO OPTIMIZAR: En IVE Valencia se paga a {p_ive_col} (¡Código Oficial: {cod_ive_ref} te da más margen!)."
+                    else:
+                        val_texto += f" | IVE Valencia disponible a {p_ive_col} (Es más bajo, mantener original)."
                     break
 
-            resultados.append({
-                "Código Original": codigo,
-                "Descripción Corta": descripcion_corta,
-                "Unidad": ud_valor,
+            # Escribir la info unificada en la celda del Excel Original
+            ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
+            
+            # Guardamos copia para mostrar la vista previa limpia en la web
+            resultados_vista.append({
+                "Partida": codigo,
+                "Descripción": resumen[:50] + "...",
                 "Precio Presu": f"{precio_presu} €",
-                "Nuevo Código CYPE": nuevo_codigo_cype,
-                "Precio CYPE": p_cype_col,
-                "Posible Código IVE": nuevo_codigo_ive,
-                "Precio IVE (Valencia)": p_ive_col,
-                "Precio Mercado Comercial": p_comercial_col,
-                "Marcas / Referencia": marca_comercial_col,
-                "VALORACIÓN EN OBRA": val_texto
+                "Dictamen Columna IA": val_texto
             })
 
-        if resultados:
-            df_final = pd.DataFrame(resultados)
-            st.success("✅ Éxito: Motor de cruce simétrico activado (CYPE vs IVE Valencia) en todas las filas.")
-            st.dataframe(df_final, use_container_width=True)
-            
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Cruce_CYPE_vs_IVE')
-            
-            st.download_button(
-                label="📥 DESCARGAR INFORME CON COMPARATIVA TOTAL (.XLSX)",
-                data=output.getvalue(),
-                file_name="Informe_Cruce_Precios_Total.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.warning("No se encontraron partidas válidas.")
+        # 3. GUARDAR EL EXCEL IDÉNTICO CON LA NUEVA COLUMNA INYECTADA
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        st.success("✅ ¡Columna IA inyectada con éxito! Se ha respetado el formato, colores y estilos de tu Excel original de Bugarra.")
+        
+        # Vista previa rápida en Streamlit
+        st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
+        
+        st.download_button(
+            label="📥 DESCARGAR TU EXCEL ORIGINAL CON COLUMNA IA (.XLSX)",
+            data=output.getvalue(),
+            file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_IA.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
             
     except Exception as e:
-        st.error(f"Error técnico en la ejecución: {e}")
+        st.error(f"Error técnico al procesar el formato del Excel: {e}")
