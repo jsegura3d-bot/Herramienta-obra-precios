@@ -3,8 +3,8 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
-st.title("🛠️ Revisor de Precios - Buscador de Margen (CYPE vs IVE Valencia)")
-st.caption("Configuración activa: Maximizar beneficio en obra. Alerta de códigos IVE que pagan más que CYPE.")
+st.title("🛠️ Revisor de Precios Pro - Cruce Total (CYPE vs IVE Valencia)")
+st.caption("Configuración activa: Base IVE (Valencia Julio 2025) + CYPE con comparativa cruzada obligatoria en todas las filas")
 
 # --- BANCO DE PRECIOS INTEGRADO IVE (VALENCIA - JULIO 2025) ---
 precios_ive = {
@@ -121,9 +121,9 @@ if uploaded_file:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
                 nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
                 if precio_presu <= precios_ive[codigo]['precio']:
-                    val_texto = "🟢 IVE OK (Precio cubierto)"
+                    val_texto = "🟢 IVE DIRECTO OK (Precio cubierto)"
                 else:
-                    val_texto = f"🔴 ALERTA: PRESUPUESTO ACTUAL SUPERA AL IVE ({precios_ive[codigo]['precio']} €)"
+                    val_texto = f"🔴 ALERTA: PRESUPUESTO SUPERA IVE ({precios_ive[codigo]['precio']} €)"
             
             # 2. EVALUACIÓN EN RADAR COMERCIAL
             elif es_aparato_maquina and "aerotermia" not in texto_analisis and "daisa" not in texto_analisis:
@@ -132,7 +132,7 @@ if uploaded_file:
                     if palabra in texto_analisis:
                         p_comercial_col = info["precio"]
                         marca_comercial_col = info["marca"]
-                        val_texto = "🟣 EQUIPO COMERCIAL"
+                        val_texto = "🟣 EQUIPO COMERCIAL (RADAR GOOGLE)"
                         comercial_encontrado = True
                         break
                 if not comercial_encontrado:
@@ -140,31 +140,35 @@ if uploaded_file:
                     marca_comercial_col = "Fabricantes autorizados"
                     val_texto = "🟣 EQUIPO COMERCIAL ESPECIAL"
 
-            # 3. EVALUACIÓN EN CYPE
+            # 3. EVALUACIÓN EN CYPE + BUSQUEDA EN PARALELO DE POSIBLE IVE (¡TU MEJORA SOLICITADA!)
             else:
                 precio_cype_est, cod_cype_oficial, ref_cype = mapear_y_estimar_cype(codigo, resumen, precio_presu)
                 if precio_cype_est is not None:
                     p_cype_col = f"{precio_cype_est} €"
                     nuevo_codigo_cype = cod_cype_oficial
                     marca_comercial_col = f"Banco: {ref_cype}"
-                    val_texto = "🟢 CYPE OK"
+                    
+                    if precio_presu >= precio_cype_est:
+                        val_texto = "🟢 CYPE OK (Margen seguro)"
+                    else:
+                        val_texto = "🟢 CYPE OK (Precio cubierto por base)"
                 else:
                     val_texto = "🔍 REVISAR MANUALMENTE"
-                    marca_comercial_col = "Fuera de rango"
+                    marca_comercial_col = "Fuera de rango estructurado"
 
-            # --- 🔍 MOTOR CRÍTICO DE BÚSQUEDA DE MARGEN: CRUCE CON IVE VALENCIA ---
-            # Rastreamos si el IVE tiene algo indexado para esta misma partida
+            # --- 🔍 MOTOR DE COMPARATIVA OBLIGATORIA CON IVE VALENCIA (¡SIEMPRE COMPARA!) ---
+            # Aunque la partida se catalogue en CYPE o Comercial, si encuentra palabra clave en el IVE te saca TODA la info
             for cod_ive_ref, info_ive in precios_ive.items():
                 if any(kw in texto_analisis for kw in info_ive["keywords"]):
                     nuevo_codigo_ive = info_ive['codigo_oficial']
                     p_ive_col = f"{info_ive['precio']} €"
                     
-                    # SI ESTABA GASTANDO CYPE (u otra cosa): Comprobamos si el IVE te da más dinero que tu presupuesto actual
-                    if info_ive["precio"] > precio_presu:
-                        val_texto = f"🔵 RECOMENDADO: Usa IVE ({info_ive['precio']} €) -> ¡Da más margen!"
-                    else:
-                        if "CYPE OK" in val_texto:
-                            val_texto = "🟢 CYPE OK (IVE es más bajo, mantener CYPE)"
+                    # Añadimos nota informativa de seguridad en la valoración si estamos comparando CYPE vs IVE
+                    if p_cype_col != "—":
+                        if info_ive["precio"] >= precio_presu:
+                            val_texto += f" | 🔵 IVE DISPONIBLE COMPARATIVO: {info_ive['precio']} € (¡Mejor precio!)"
+                        else:
+                            val_texto += " | ⚠️ IVE disponible pero es más bajo"
                     break
 
             resultados.append({
@@ -183,21 +187,21 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Motor de Optimización de Margen activado. Buscando precios más altos en el IVE.")
+            st.success("✅ Éxito: Motor de cruce simétrico activado (CYPE vs IVE Valencia) en todas las filas.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Cruce_Margen_Obra')
+                df_final.to_excel(writer, index=False, sheet_name='Cruce_CYPE_vs_IVE')
             
             st.download_button(
-                label="📥 DESCARGAR INFORME DE MAXIMIZACIÓN (.XLSX)",
+                label="📥 DESCARGAR INFORME CON COMPARATIVA TOTAL (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Margen_Optimizado_Valencia.xlsx",
+                file_name="Informe_Cruce_Precios_Total.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas procesables.")
+            st.warning("No se encontraron partidas válidas.")
             
     except Exception as e:
         st.error(f"Error técnico en la ejecución: {e}")
