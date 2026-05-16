@@ -4,21 +4,35 @@ import io
 import openpyxl
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
-st.title("🛠️ Revisor de Precios Pro - Formato Bugarra Fijo")
-st.caption("Configuración activa: Lógica de 4 Casos con control de precios en elementos comerciales (Caso 3).")
+st.title("🛠️ Revisor de Precios Pro - Rastreador de Marcas (Bugarra)")
+st.caption("Configuración activa: El Caso 3 detecta marcas específicas en la descripción y calcula precios equivalentes.")
 
 # --- PREFIJOS MAESTROS IVE PARA DETECCIÓN ---
 codigos_ive_referencia = ["0AF010", "EIEB20", "DRT030", "EIEC", "PIBB", "DAISA"]
 
-# --- RADAR COMERCIAL AVANZADO CON RANGOS NUMÉRICOS PARA VALIDACIÓN (Caso 3) ---
-cat_comercial = {
-    "iluminación": {"marca": "Philips / Ledvance / Jiso", "precio_min": 35.0, "precio_max": 120.0, "texto_coste": "35€ - 120€ / ud"},
-    "fotovoltaica": {"marca": "Huawei FusionSolar / Fronius / Longi", "precio_min": 1150.0, "precio_max": 4200.0, "texto_coste": "Inversores: 1.150€ - 4.200€"},
-    "aerotermia": {"marca": "Mitsubishi Electric / Daikin / Vaillant", "precio_min": 850.0, "precio_max": 3400.0, "texto_coste": "850€ - 3.400€ / ud"},
-    "clima": {"marca": "Mitsubishi Electric / Daikin", "precio_min": 850.0, "precio_max": 3400.0, "texto_coste": "850€ - 3.400€"},
-    "bomba": {"marca": "Grundfos / Ebara / Wilo", "precio_min": 180.0, "precio_max": 700.0, "texto_coste": "180€ - 700€ / ud"},
-    "extractor": {"marca": "S&P (Soler & Palau) / Casals", "precio_min": 110.0, "precio_max": 420.0, "texto_coste": "110€ - 420€ / ud"},
-    "mecanismos": {"marca": "Simon 27-100 / Schneider", "precio_min": 12.0, "precio_max": 40.0, "texto_coste": "12€ - 40€ / ud"}
+# --- DICCIONARIO AVANZADO DE MARCAS Y PRECIOS OBJETIVOS (Caso 3) ---
+# Si en la columna C pones la rama, el sistema buscará estas sub-marcas dentro de la descripción (Columna B)
+db_marcas_comerciales = {
+    "iluminación": [
+        {"keywords": ["philips", "coreline"], "marca_real": "Philips", "precio_est": 65.0},
+        {"keywords": ["ledvance", "osram"], "marca_real": "Ledvance", "precio_est": 45.0},
+        {"keywords": ["jiso"], "marca_real": "Jiso Iluminación", "precio_est": 38.0}
+    ],
+    "mecanismos": [
+        {"keywords": ["simon 100", "simon100"], "marca_real": "Simon 100", "precio_est": 32.0},
+        {"keywords": ["simon 27", "simon27"], "marca_real": "Simon 27", "precio_est": 14.5},
+        {"keywords": ["schneider", "asfora"], "marca_real": "Schneider Electric", "precio_est": 18.0}
+    ],
+    "fotovoltaica": [
+        {"keywords": ["huawei", "sun2000"], "marca_real": "Huawei FusionSolar", "precio_est": 1850.0},
+        {"keywords": ["fronius", "symo"], "marca_real": "Fronius", "precio_est": 2400.0},
+        {"keywords": ["longi"], "marca_real": "Longi Solar (Paneles)", "precio_est": 145.0}
+    ],
+    "aerotermia": [
+        {"keywords": ["mitsubishi", "ecodan"], "marca_real": "Mitsubishi Electric", "precio_est": 4200.0},
+        {"keywords": ["daikin", "altherma"], "marca_real": "Daikin Altherma", "precio_est": 4600.0},
+        {"keywords": ["vaillant", "arotherm"], "marca_real": "Vaillant", "precio_est": 3900.0}
+    ]
 }
 
 uploaded_file = st.file_uploader("Sube tu Excel de Bugarra", type=["xlsx"])
@@ -36,15 +50,15 @@ if uploaded_file:
         df_temp = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ws.title)
         columnas_limpias = [str(c).strip().lower() for c in df_temp.columns]
         
-        # --- POSICIONES DE COLUMNAS SEGÚN TU ESTRUCTURA ---
+        # --- POSICIONES DE COLUMNAS FIJAS ---
         col_codigo_idx = 1      # Columna A (Código)
-        col_resumen_idx = 2     # Columna B (Resumen)
+        col_resumen_idx = 2     # Columna B (Descripción/Resumen)
         col_comercial_idx = 3   # Columna C (DATOS COMERCIALES)
         
-        # Localizamos dinámicamente la columna del precio/presupuesto de tu Excel
+        # Localizamos la columna del precio introducido en el presupuesto
         col_precio_idx = next((i + 1 for i, c in enumerate(columnas_limpias) if "pres" in c or "imp" in c or "prec" in c or "val" in c), None)
 
-        # La nueva columna de revisión se añade a la derecha del todo
+        # Añadimos la columna de revisión a la derecha
         col_ia_destino = ws.max_column + 1
         ws.cell(row=1, column=col_ia_destino, value="REVISIÓN IA").font = openpyxl.styles.Font(bold=True, color="0000FF")
 
@@ -55,7 +69,6 @@ if uploaded_file:
             resumen = str(ws.cell(row=row_idx, column=col_resumen_idx).value or '').strip()
             valor_comercial = str(ws.cell(row=row_idx, column=col_comercial_idx).value or '').strip().lower()
             
-            # Intentamos rascar el precio de la fila. Si no encuentra o está roto, por defecto 0.0
             precio_presu = 0.0
             if col_precio_idx is not None:
                 try:
@@ -68,44 +81,52 @@ if uploaded_file:
 
             val_texto = ""
             codigo_upper = codigo.upper()
+            resumen_lower = resumen.lower()
 
-            # --- PRIORIDAD 1: CASO 3 (Comerciales con validación de precio) ---
+            # --- PRIORIDAD 1: CASO 3 (Elementos comerciales con rastreo de marca) ---
             if valor_comercial != "":
-                if valor_comercial in cat_comercial:
-                    info = cat_comercial[valor_comercial]
-                    
-                    # Comprobamos si tu precio se pasa del máximo del mercado
-                    if precio_presu > info["precio_max"]:
-                        dictamen_precio = "❌ Precio Comercial Alto"
+                marca_detectada = None
+                precio_mercado_estimado = 0.0
+                
+                # Si la rama existe en nuestra base de datos, buscamos la marca en la descripción (Columna B)
+                if valor_comercial in db_marcas_comerciales:
+                    for item in db_marcas_comerciales[valor_comercial]:
+                        if any(kw in resumen_lower for kw in item["keywords"]):
+                            marca_detectada = item["marca_real"]
+                            precio_mercado_estimado = item["precio_est"]
+                            break
+                
+                if marca_detectada:
+                    # Margen de tolerancia: si tu precio es superior al estimado de mercado, avisa
+                    if precio_presu > (precio_mercado_estimado * 1.15):
+                        status = "❌ Precio Alto"
                     else:
-                        dictamen_precio = "🟢 COMERCIAL OK"
+                        status = "🟢 Precio Correcto"
                         
-                    val_texto = f"🟣 EQUIPO COMERCIAL ({dictamen_precio}). Marcas aconsejadas: {info['marca']} | Coste estimado: {info['texto_coste']}."
+                    val_texto = f"Mismo equipo o equivalente ({marca_detectada}). Precio aprox mercado: {precio_mercado_estimado}€ | Estado: {status}."
                 else:
-                    val_texto = f"🟣 EQUIPO COMERCIAL (Rama nueva: {valor_comercial}). Revisar marcas autorizadas en el proyecto."
+                    # Si pusiste la rama pero en el texto no se menciona una marca conocida de la lista
+                    val_texto = f"Mismo equipo o equivalente (Marca no identificada en texto). Revisar presupuesto estimado para rama: {valor_comercial.upper()}."
 
-            # --- PRIORIDAD 2: ANÁLISIS DE CÓDIGOS IVE / CYPE / INVENTADOS ---
+            # --- PRIORIDAD 2: ANÁLISIS DE CÓDIGOS (Si la columna C está vacía) ---
             else:
-                # CASO 1: Código Nativo IVE
                 if any(ive_ref in codigo_upper for ive_ref in codigos_ive_referencia) or (len(codigo) >= 6 and codigo[0].isdigit() and codigo[1].isalpha()):
                     val_texto = "Código IVE Para precios se deberían de usar de la base de precios del IVE actual."
 
-                # CASO 2: Estructuras reconocibles de CYPE
                 elif any(c in codigo_upper for c in [".", "-", "_"]) or len(codigo) >= 5:
                     val_texto = "Código CYPE Para precios se deberían de usar de la base de precios del IVE, son superiores y más acorde al mercado"
                 
-                # CASO 4: Código Erróneo / Inventado / Roto
                 else:
                     val_texto = "❌ CODIGO ERRONEO / INVENTADO | Cotejar con IVE"
 
-            # Inyectamos en la celda final del Excel original (Manteniendo formatos)
+            # Guardamos el resultado en el Excel
             ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
             
             resultados_vista.append({
                 "Código": codigo,
-                "Descripción": resumen[:30] + "...",
+                "Descripción": resumen[:35] + "...",
                 "Datos Comerciales": valor_comercial if valor_comercial != "" else "—",
-                "Precio Introducido": f"{precio_presu} €",
+                "Precio Presu": f"{precio_presu} €",
                 "Resultado REVISIÓN IA": val_texto
             })
 
@@ -113,13 +134,13 @@ if uploaded_file:
         wb.save(output)
         output.seek(0)
 
-        st.success("✅ ¡Mejora añadida! Los comerciales ahora evalúan si el precio introducido es correcto.")
+        st.success("✅ ¡Ajustado! El sistema ahora cruza la descripción buscando la marca exacta y calcula su precio aproximado.")
         st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
         
         st.download_button(
-            label="📥 DESCARGAR EXCEL CONTROL TOTAL DE PRECIOS (.XLSX)",
+            label="📥 DESCARGAR EXCEL CON PRECIOS EQUIVALENTES (.XLSX)",
             data=output.getvalue(),
-            file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_Precios_IA.xlsx",
+            file_name=f"{uploaded_file.name.split('.')[0]}_Revision_Equivalentes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
             
