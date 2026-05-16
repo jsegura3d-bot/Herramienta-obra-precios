@@ -3,11 +3,10 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
-st.title("🛠️ Revisor de Precios - Sincronizado IVE BDC25 (Valencia - Julio 2025)")
-st.caption("Configuración activa: Base de Datos de Construcción IVE (BDC25) | Provincia: Valencia | Tarifa: Julio 2025")
+st.title("🛠️ Revisor de Precios - Buscador de Margen (CYPE vs IVE Valencia)")
+st.caption("Configuración activa: Maximizar beneficio en obra. Alerta de códigos IVE que pagan más que CYPE.")
 
-# --- BANCO DE PRECIOS INTEGRADO IVE (SINCRONIZADO EXCLUSIVO PARA VALENCIA) ---
-# Hemos adaptado los precios estructurales fijando la provincia de Valencia (Julio 2025)
+# --- BANCO DE PRECIOS INTEGRADO IVE (VALENCIA - JULIO 2025) ---
 precios_ive = {
     "0AF010": {"precio": 73.12, "codigo_oficial": "0AF010", "keywords": ["acometida", "agua", "desconexión"]},
     "EIEB20hac": {"precio": 35.50, "codigo_oficial": "EIEB20hac", "keywords": ["interruptor", "estanco", "mecanismo"]},
@@ -24,7 +23,7 @@ precios_ive = {
     "DAISA.07A": {"precio": 16.23, "codigo_oficial": "DAISA.07A", "keywords": ["accesorio", "naos", "ket"]}
 }
 
-# --- BANCO DE PRECIOS E IDENTIFICADORES CYPE (VALENCIA) ---
+# --- BANCO DE PRECIOS E IDENTIFICADORES CYPE ---
 precios_cype_fijos = {
     "0AE010": {"precio": 292.54, "codigo_oficial": "0AE010"},
     "0AS010": {"precio": 203.04, "codigo_oficial": "0AS010"},
@@ -117,7 +116,7 @@ if uploaded_file:
             texto_analisis = (codigo + " " + resumen).lower()
             es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led", "emergencia", "aerotermia"])
 
-            # 1. EVALUACIÓN DE ENTRADA DIRECTA EN IVE (Filtro por código exacto de Valencia)
+            # 1. EVALUACIÓN DE ENTRADA DIRECTA EN IVE
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
                 nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
@@ -133,7 +132,7 @@ if uploaded_file:
                     if palabra in texto_analisis:
                         p_comercial_col = info["precio"]
                         marca_comercial_col = info["marca"]
-                        val_texto = "🟣 EQUIPO COMERCIAL (RADAR GOOGLE)"
+                        val_texto = "🟣 EQUIPO COMERCIAL"
                         comercial_encontrado = True
                         break
                 if not comercial_encontrado:
@@ -148,59 +147,57 @@ if uploaded_file:
                     p_cype_col = f"{precio_cype_est} €"
                     nuevo_codigo_cype = cod_cype_oficial
                     marca_comercial_col = f"Banco: {ref_cype}"
-                    if precio_presu <= precio_cype_est:
-                        val_texto = "🟢 CYPE OK (Precio cubierto)"
-                    else:
-                        val_texto = f"🔴 ALERTA: PRESUPUESTO ACTUAL SUPERA A CYPE ({precio_cype_est} €)"
+                    val_texto = "🟢 CYPE OK"
                 else:
                     val_texto = "🔍 REVISAR MANUALMENTE"
-                    marca_comercial_col = "Fuera de rango estructurado"
+                    marca_comercial_col = "Fuera de rango"
 
-            # --- 🔍 MOTOR DE OPTIMIZACIÓN CRUZADA EN VALENCIA (IVE ≥ PRESU) ---
-            if p_ive_col == "—":
-                for cod_ive_ref, info_ive in precios_ive.items():
-                    if any(kw in texto_analisis for kw in info_ive["keywords"]):
-                        # Filtro de seguridad: IVE tiene que ser mayor o igual al presupuesto para proteger margen
-                        if info_ive["precio"] >= precio_presu:
-                            nuevo_codigo_ive = info_ive['codigo_oficial']
-                            p_ive_col = f"{info_ive['precio']} €"
-                            val_texto = "🔵 OPTIMIZAR: IVE TIENE MEJOR PRECIO (MÁS ALTO / SEGURO)"
-                            break
-                        else:
-                            nuevo_codigo_ive = "—"
-                            val_texto += " | ⚠️ IVE disponible pero es más bajo (No usar)"
+            # --- 🔍 MOTOR CRÍTICO DE BÚSQUEDA DE MARGEN: CRUCE CON IVE VALENCIA ---
+            # Rastreamos si el IVE tiene algo indexado para esta misma partida
+            for cod_ive_ref, info_ive in precios_ive.items():
+                if any(kw in texto_analisis for kw in info_ive["keywords"]):
+                    nuevo_codigo_ive = info_ive['codigo_oficial']
+                    p_ive_col = f"{info_ive['precio']} €"
+                    
+                    # SI ESTABA GASTANDO CYPE (u otra cosa): Comprobamos si el IVE te da más dinero que tu presupuesto actual
+                    if info_ive["precio"] > precio_presu:
+                        val_texto = f"🔵 RECOMENDADO: Usa IVE ({info_ive['precio']} €) -> ¡Da más margen!"
+                    else:
+                        if "CYPE OK" in val_texto:
+                            val_texto = "🟢 CYPE OK (IVE es más bajo, mantener CYPE)"
+                    break
 
             resultados.append({
                 "Código Original": codigo,
                 "Descripción Corta": descripcion_corta,
                 "Unidad": ud_valor,
                 "Precio Presu": f"{precio_presu} €",
-                "Nuevo Código IVE": nuevo_codigo_ive,
-                "Precio IVE": p_ive_col,
                 "Nuevo Código CYPE": nuevo_codigo_cype,
                 "Precio CYPE": p_cype_col,
+                "Posible Código IVE": nuevo_codigo_ive,
+                "Precio IVE (Valencia)": p_ive_col,
                 "Precio Mercado Comercial": p_comercial_col,
-                "Marcas Recomendadas": marca_comercial_col,
+                "Marcas / Referencia": marca_comercial_col,
                 "VALORACIÓN EN OBRA": val_texto
             })
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Éxito: Sincronización completada con la base de datos oficial de Valencia (Julio 2025).")
+            st.success("✅ Motor de Optimización de Margen activado. Buscando precios más altos en el IVE.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='IVE_Valencia_Julio2025')
+                df_final.to_excel(writer, index=False, sheet_name='Cruce_Margen_Obra')
             
             st.download_button(
-                label="📥 DESCARGAR INFORME VALENCIA JULIO 2025 (.XLSX)",
+                label="📥 DESCARGAR INFORME DE MAXIMIZACIÓN (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Precios_Valencia_Julio2025.xlsx",
+                file_name="Informe_Margen_Optimizado_Valencia.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas válidas.")
+            st.warning("No se encontraron partidas procesables.")
             
     except Exception as e:
         st.error(f"Error técnico en la ejecución: {e}")
