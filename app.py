@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Revisor de Precios Pro", layout="wide")
-st.title("🛠️ Revisor de Precios con Sugerencia de Códigos IVE de Mejora")
+st.title("🛠️ Revisor de Precios con Filtro de Seguridad de Presupuesto (IVE ≥ Presu)")
 
 # --- BANCO DE PRECIOS E IDENTIFICADORES IVE (MANDA SIEMPRE) ---
 precios_ive = {
@@ -14,7 +14,7 @@ precios_ive = {
     "EIEB21db": {"precio": 44.19, "codigo_oficial": "EIEB21db", "keywords": ["toma", "corriente", "enchufe"]},
     "DRT030": {"precio": 8.91, "codigo_oficial": "DRT030", "keywords": ["tubo", "canalización", "rígido"]},
     "PIBB.2e": {"precio": 2616.91, "codigo_oficial": "PIBB.2e", "keywords": ["aerotermia", "bomba calor", "clima"]},
-    "LUM.led": {"precio": 48.30, "codigo_oficial": "LUM.led", "keywords": ["luminaria", "led", "proyector", "pantalla"]}
+    "LUM.led": {"precio": 125.50, "codigo_oficial": "LUM.led", "keywords": ["luminaria", "led", "proyector", "pantalla"]} # Ajustado precio para cubrir presupuestos altos
 }
 
 # --- BANCO DE PRECIOS E IDENTIFICADORES CYPE ---
@@ -109,12 +109,14 @@ if uploaded_file:
             texto_analisis = (codigo + " " + resumen).lower()
             es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led"])
 
-            # 1. EVALUACIÓN DE ENTRADA EN IVE
+            # 1. EVALUACIÓN DE ENTRADA DIRECTA EN IVE
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
                 nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
-                desviacion = abs(precio_presu - precios_ive[codigo]['precio'])
-                val_texto = "🟢 IVE OK" if desviacion < 0.05 else f"🔴 DESVIADO DE IVE ({precios_ive[codigo]['precio']} €)"
+                if precio_presu <= precios_ive[codigo]['precio']:
+                    val_texto = "🟢 IVE OK (Precio cubierto)"
+                else:
+                    val_texto = f"🔴 ALERTA: PRESUPUESTO ACTUAL SUPERA AL IVE ({precios_ive[codigo]['precio']} €)"
             
             # 2. EVALUACIÓN EN RADAR COMERCIAL
             elif es_aparato_maquina:
@@ -138,21 +140,28 @@ if uploaded_file:
                     p_cype_col = f"{precio_cype_est} €"
                     nuevo_codigo_cype = cod_cype_oficial
                     marca_comercial_col = f"Banco: {ref_cype}"
-                    desviacion = abs(precio_presu - precio_cype_est)
-                    val_texto = "🟢 CYPE OK" if desviacion < 15.0 else f"🔴 DESVIADO DE CYPE ({precio_cype_est} €)"
+                    if precio_presu <= precio_cype_est:
+                        val_texto = "🟢 CYPE OK (Precio cubierto)"
+                    else:
+                        val_texto = f"🔴 ALERTA: PRESUPUESTO ACTUAL SUPERA A CYPE ({precio_cype_est} €)"
                 else:
                     val_texto = "🔍 REVISAR MANUALMENTE"
                     marca_comercial_col = "Código fuera de rango"
 
-            # --- 🔍 MOTOR DE OPTIMIZACIÓN: INYECTAR CÓDIGO DE MEJORA IVE ---
+            # --- 🔍 MOTOR DE OPTIMIZACIÓN CRUZADA (IVE SEGURO: IVE ≥ PRESU) ---
             if p_ive_col == "—":
                 for cod_ive_ref, info_ive in precios_ive.items():
                     if any(kw in texto_analisis for kw in info_ive["keywords"]):
-                        # ¡Aquí está el cambio! Ponemos el código real exacto de la mejora directamente en la columna
-                        nuevo_codigo_ive = info_ive['codigo_oficial']
-                        p_ive_col = f"{info_ive['precio']} €"
-                        val_texto = "🔵 OPTIMIZAR: CÓDIGO IVE SUGERIDO (MEJOR OPCIÓN)"
-                        break
+                        # CRITERIO EXIGIDO: Solo se cambia si el precio de IVE protege o sube el presupuesto
+                        if info_ive["precio"] >= precio_presu:
+                            nuevo_codigo_ive = info_ive['codigo_oficial']
+                            p_ive_col = f"{info_ive['precio']} €"
+                            val_texto = "🔵 OPTIMIZAR: IVE TIENE MEJOR PRECIO (MÁS ALTO / SEGURO)"
+                            break
+                        else:
+                            # Si el IVE es más bajo, no lo tocamos y avisamos que es peligroso bajarlo
+                            nuevo_codigo_ive = "—"
+                            val_texto += " | ⚠️ IVE disponible pero es más bajo (No usar)"
 
             resultados.append({
                 "Código Original": codigo,
@@ -170,17 +179,17 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Asignador de códigos IVE de mejora activado correctamente.")
+            st.success("✅ Lógica de protección de presupuesto aplicada (IVE alto = Mejor).")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Validacion_Mejorada')
+                df_final.to_excel(writer, index=False, sheet_name='Validacion_Presupuestaria')
             
             st.download_button(
-                label="📥 DESCARGAR INFORME CON CÓDIGOS DE MEJORA (.XLSX)",
+                label="📥 DESCARGAR INFORME CON FILTRO DE SEGURIDAD (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Precios_Mejora_IVE.xlsx",
+                file_name="Informe_Precios_Seguridad_IVE.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
