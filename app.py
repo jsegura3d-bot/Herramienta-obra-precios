@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Revisor de Precios Pro", layout="wide")
-st.title("🛠️ Revisor de Precios con Chequeo Cruzado de Optimización (IVE > CYPE)")
+st.title("🛠️ Revisor de Precios con Sugerencia de Códigos IVE de Mejora")
 
 # --- BANCO DE PRECIOS E IDENTIFICADORES IVE (MANDA SIEMPRE) ---
 precios_ive = {
@@ -109,14 +109,14 @@ if uploaded_file:
             texto_analisis = (codigo + " " + resumen).lower()
             es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led"])
 
-            # 1. EVALUACIÓN INICIAL EN IVE
+            # 1. EVALUACIÓN DE ENTRADA EN IVE
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
                 nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
                 desviacion = abs(precio_presu - precios_ive[codigo]['precio'])
                 val_texto = "🟢 IVE OK" if desviacion < 0.05 else f"🔴 DESVIADO DE IVE ({precios_ive[codigo]['precio']} €)"
             
-            # 2. EVALUACIÓN EN RADAR COMERCIAL (MAQUINARIA / LUMINARIAS)
+            # 2. EVALUACIÓN EN RADAR COMERCIAL
             elif es_aparato_maquina:
                 comercial_encontrado = False
                 for palabra, info in cat_comercial.items():
@@ -141,18 +141,17 @@ if uploaded_file:
                     desviacion = abs(precio_presu - precio_cype_est)
                     val_texto = "🟢 CYPE OK" if desviacion < 15.0 else f"🔴 DESVIADO DE CYPE ({precio_cype_est} €)"
                 else:
-                    val_texto = "      REVISAR MANUALMENTE"
+                    val_texto = "🔍 REVISAR MANUALMENTE"
                     marca_comercial_col = "Código fuera de rango"
 
-            # --- 🔍 ÚLTIMO CHECK CRÍTICO: ¿HAY ALGO MEJOR EN EL IVE ACTUALMENTE? ---
-            # Si el elemento se resolvió por CYPE o Comercial, miramos si el IVE tiene una alternativa mejor
+            # --- 🔍 MOTOR DE OPTIMIZACIÓN: INYECTAR CÓDIGO DE MEJORA IVE ---
             if p_ive_col == "—":
                 for cod_ive_ref, info_ive in precios_ive.items():
-                    # Si coinciden las palabras clave críticas en la descripción
                     if any(kw in texto_analisis for kw in info_ive["keywords"]):
-                        nuevo_codigo_ive = f"💡 Sugerido: {info_ive['codigo_oficial']}"
-                        p_ive_col = f"{info_ive['precio']} € (¡Mejor!)"
-                        val_texto = "🔵 EN IVE ESTÁ ACTUALMENTE MEJOR (Optimizar)"
+                        # ¡Aquí está el cambio! Ponemos el código real exacto de la mejora directamente en la columna
+                        nuevo_codigo_ive = info_ive['codigo_oficial']
+                        p_ive_col = f"{info_ive['precio']} €"
+                        val_texto = "🔵 OPTIMIZAR: CÓDIGO IVE SUGERIDO (MEJOR OPCIÓN)"
                         break
 
             resultados.append({
@@ -171,21 +170,21 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ ¡Control de calidad total activado! Check de optimización IVE en funcionamiento.")
+            st.success("✅ Asignador de códigos IVE de mejora activado correctamente.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Validacion_Optimizada')
+                df_final.to_excel(writer, index=False, sheet_name='Validacion_Mejorada')
             
             st.download_button(
-                label="📥 DESCARGAR INFORME CON CHEQUEO CRUZADO (.XLSX)",
+                label="📥 DESCARGAR INFORME CON CÓDIGOS DE MEJORA (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Precios_Check_IVE.xlsx",
+                file_name="Informe_Precios_Mejora_IVE.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas para analizar.")
+            st.warning("No se encontraron partidas válidas.")
             
     except Exception as e:
         st.error(f"Error general en la ejecución: {e}")
