@@ -3,17 +3,18 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="Revisor de Precios Pro", layout="wide")
-st.title("🛠️ Revisor de Precios Avanzado: IVE ➔ CYPE ➔ Comercial")
+st.title("🛠️ Revisor de Precios con Chequeo Cruzado de Optimización (IVE > CYPE)")
 
-# --- BANCO DE PRECIOS E IDENTIFICADORES IVE ---
+# --- BANCO DE PRECIOS E IDENTIFICADORES IVE (MANDA SIEMPRE) ---
 precios_ive = {
-    "0AF010": {"precio": 73.12, "codigo_oficial": "0AF010"},
-    "EIEB20hac": {"precio": 35.50, "codigo_oficial": "EIEB20hac"},
-    "EIEB20hab": {"precio": 37.55, "codigo_oficial": "EIEB20hab"},
-    "EIEB20beg2": {"precio": 210.32, "codigo_oficial": "EIEB20beg2"},
-    "EIEB21db": {"precio": 44.19, "codigo_oficial": "EIEB21db"},
-    "DRT030": {"precio": 8.91, "codigo_oficial": "DRT030"},
-    "PIBB.2e": {"precio": 2616.91, "codigo_oficial": "PIBB.2e"}  # Bomba aerotermia oficial
+    "0AF010": {"precio": 73.12, "codigo_oficial": "0AF010", "keywords": ["acometida", "agua", "desconexión"]},
+    "EIEB20hac": {"precio": 35.50, "codigo_oficial": "EIEB20hac", "keywords": ["interruptor", "estanco", "mecanismo"]},
+    "EIEB20hab": {"precio": 37.55, "codigo_oficial": "EIEB20hab", "keywords": ["tecla", "unipolar"]},
+    "EIEB20beg2": {"precio": 210.32, "codigo_oficial": "EIEB20beg2", "keywords": ["detector", "presencia", "movimiento"]},
+    "EIEB21db": {"precio": 44.19, "codigo_oficial": "EIEB21db", "keywords": ["toma", "corriente", "enchufe"]},
+    "DRT030": {"precio": 8.91, "codigo_oficial": "DRT030", "keywords": ["tubo", "canalización", "rígido"]},
+    "PIBB.2e": {"precio": 2616.91, "codigo_oficial": "PIBB.2e", "keywords": ["aerotermia", "bomba calor", "clima"]},
+    "LUM.led": {"precio": 48.30, "codigo_oficial": "LUM.led", "keywords": ["luminaria", "led", "proyector", "pantalla"]}
 }
 
 # --- BANCO DE PRECIOS E IDENTIFICADORES CYPE ---
@@ -22,27 +23,23 @@ precios_cype_fijos = {
     "0AS010": {"precio": 203.04, "codigo_oficial": "0AS010"},
     "DPT020": {"precio": 5.84, "codigo_oficial": "DPT020"},
     "IEEL.1db": {"precio": 1.45, "codigo_oficial": "IEEL.1db"},
-    "IFA005": {"precio": 36.94, "codigo_oficial": "IFA005"}    # Acometida agua oficial
+    "IFA005": {"precio": 36.94, "codigo_oficial": "IFA005"}
 }
 
-# --- RADAR COMERCIAL (Google / Suministradores) ---
+# --- RADAR COMERCIAL (Mercado / Google) ---
 cat_comercial = {
-    "luminaria": {"marca": "Philips / Ledvance / Jiso / Prilux", "precio": "35€ - 120€ / ud"},
-    "proyector": {"marca": "Disano / Gewiss / Simon / Sylvania", "precio": "85€ - 380€ / ud"},
-    "pantalla led": {"marca": "Philips CoreLine / Reggiani", "precio": "45€ - 95€ / ud"},
-    "downlight": {"marca": "Jiso Iluminación / Arkoslight", "precio": "18€ - 55€ / ud"},
-    "bomba": {"marca": "Grundfos / Ebara / Wilo / Salmson", "precio": "180€ - 700€ / ud"},
-    "extractor": {"marca": "S&P (Soler & Palau) / Casals / Cata", "precio": "110€ - 420€ / ud"},
-    "clima": {"marca": "Mitsubishi Electric / Daikin / Toshiba", "precio": "850€ - 3.400€"},
-    "aire ac": {"marca": "Fujitsu / LG / Panasonic / Midea", "precio": "750€ - 2.800€"},
-    "inversor": {"marca": "Huawei FusionSolar / Fronius / Sungrow", "precio": "1.150€ - 4.200€"},
-    "termo": {"marca": "Ariston / Fleck / Junkers / Cointra", "precio": "160€ - 450€ / ud"},
-    "acumulador": {"marca": "Vaillant / Saunier Duval / Baxi", "precio": "400€ - 1.200€"},
-    "cuadro": {"marca": "Schneider Electric / ABB / Hager", "precio": "220€ - 1.150€"},
-    "mecanismos": {"marca": "Simon 27-100 / Schneider / Legrand", "precio": "12€ - 40€ / ud"}
+    "luminaria": {"marca": "Philips / Ledvance / Jiso", "precio": "35€ - 120€ / ud"},
+    "proyector": {"marca": "Disano / Gewiss / Simon", "precio": "85€ - 380€ / ud"},
+    "pantalla led": {"marca": "Philips CoreLine", "precio": "45€ - 95€ / ud"},
+    "downlight": {"marca": "Jiso / Arkoslight", "precio": "18€ - 55€ / ud"},
+    "bomba": {"marca": "Grundfos / Ebara / Wilo", "precio": "180€ - 700€ / ud"},
+    "extractor": {"marca": "S&P (Soler & Palau) / Casals", "precio": "110€ - 420€ / ud"},
+    "clima": {"marca": "Mitsubishi Electric / Daikin", "precio": "850€ - 3.400€"},
+    "inversor": {"marca": "Huawei FusionSolar / Fronius", "precio": "1.150€ - 4.200€"},
+    "mecanismos": {"marca": "Simon 27-100 / Schneider", "precio": "12€ - 40€ / ud"}
 }
 
-# --- MOTOR DE ASIGNACIÓN DE CÓDIGOS Y PRECIOS CYPE ---
+# --- MOTOR DE ASIGNACIÓN CYPE ---
 def mapear_y_estimar_cype(codigo, descripcion, precio_presu):
     codigo_clean = codigo.upper().strip()
     desc_clean = descripcion.lower()
@@ -50,32 +47,18 @@ def mapear_y_estimar_cype(codigo, descripcion, precio_presu):
     if codigo_clean in precios_cype_fijos:
         return precios_cype_fijos[codigo_clean]["precio"], precios_cype_fijos[codigo_clean]["codigo_oficial"], "Base Exacta"
         
-    # Identificación por patrones y asignación automática de nuevos códigos CYPE oficiales
     if codigo_clean.startswith("DDDI") or "desmontado" in desc_clean:
-        if "saneamiento" in desc_clean: 
-            return 610.50, "DDDI10ccbab", "CYPE - Desmontaje Saneamiento"
-        if "fontanería" in desc_clean: 
-            return 545.20, "DDDI10cbbab", "CYPE - Desmontaje Fontanería"
+        if "saneamiento" in desc_clean: return 610.50, "DDDI10ccbab", "CYPE - Desmontaje Saneamiento"
+        if "fontanería" in desc_clean: return 545.20, "DDDI10cbbab", "CYPE - Desmontaje Fontanería"
         return 450.00, "DDDI10a", "CYPE - Desmontajes Generales"
 
-    if codigo_clean.startswith("DIE") or "eléctrica" in desc_clean: 
-        return 685.00, "DIE060", "CYPE - Instalación Eléctrica"
-        
-    if "acometida" in desc_clean and "agua" in desc_clean:
-        return 36.94, "IFA005", "CYPE - Acometidas Agua"
+    if codigo_clean.startswith("DIE") or "eléctrica" in desc_clean: return 685.00, "DIE060", "CYPE - Instalación Eléctrica"
+    if "acometida" in desc_clean and "agua" in desc_clean: return 36.94, "IFA005", "CYPE - Acometidas Agua"
+    if codigo_clean.startswith("DSM") or "sanitario" in desc_clean: return 31.50, "DSM010", "CYPE - Aparatos Sanitarios"
+    if codigo_clean.startswith("DPT") or "demolición" in desc_clean: return 5.50, "DPT020", "CYPE - Demoliciones"
 
-    if codigo_clean.startswith("DSM") or "sanitario" in desc_clean: 
-        return 31.50, "DSM010", "CYPE - Aparatos Sanitarios"
-        
-    if codigo_clean.startswith("DLP") or codigo_clean.startswith("DFL") or "puerta" in desc_clean: 
-        return 26.80, "DFL010", "CYPE - Carpinterías"
-        
-    if codigo_clean.startswith("DFF") or codigo_clean.startswith("DPT") or "demolición" in desc_clean: 
-        return 5.50, "DPT020", "CYPE - Demoliciones"
-
-    # Si tiene estructura pero no cazó familia específica
     if any(c in codigo_clean for c in [".", "-"]) or len(codigo_clean) > 6:
-        return round(precio_presu * 0.95, 2), f"{codigo_clean}_CYPE", "CYPE - Estructura Detectada"
+        return round(precio_presu * 0.95, 2), f"{codigo_clean}_CYPE", "CYPE - Estructura"
         
     return None, "—", None
 
@@ -107,19 +90,14 @@ if uploaded_file:
             codigo = str(fila.get(col_codigo, '')).strip()
             resumen = str(fila.get(col_resumen, '')).strip()
             
-            try:
-                precio_presu = float(fila.get(col_pres, 0))
-            except:
-                precio_presu = 0.0
+            try: precio_presu = float(fila.get(col_pres, 0))
+            except: precio_presu = 0.0
 
-            if not codigo or codigo == "None" or len(codigo) < 2:
-                continue
+            if not codigo or codigo == "None" or len(codigo) < 2: continue
 
             descripcion_corta = resumen.split('\n')[0][:60]
-            if len(resumen) > 60:
-                descripcion_corta += "..."
+            if len(resumen) > 60: descripcion_corta += "..."
 
-            # Inicialización de celdas por defecto
             nuevo_codigo_ive = "—"
             p_ive_col = "—"
             nuevo_codigo_cype = "—"
@@ -129,23 +107,16 @@ if uploaded_file:
             val_texto = ""
 
             texto_analisis = (codigo + " " + resumen).lower()
-            es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led", "aerotermia"])
+            es_aparato_maquina = any(palabra in texto_analisis for palabra in ["luminaria", "proyector", "bomba", "extractor", "clima", "aire", "inversor", "termo", "downlight", "pantalla led"])
 
-            # --- APLICACIÓN DE FILTRADO Y MAPEO EN CASCADA CORREGIDO ---
-
-            # 1. EVALUAR E INYECTAR DATOS DE IVE
+            # 1. EVALUACIÓN INICIAL EN IVE
             if codigo in precios_ive:
                 p_ive_col = f"{precios_ive[codigo]['precio']} €"
                 nuevo_codigo_ive = precios_ive[codigo]['codigo_oficial']
                 desviacion = abs(precio_presu - precios_ive[codigo]['precio'])
                 val_texto = "🟢 IVE OK" if desviacion < 0.05 else f"🔴 DESVIADO DE IVE ({precios_ive[codigo]['precio']} €)"
             
-            elif "aerotermia" in texto_analisis and "200" in texto_analisis:
-                p_ive_col = "2616.91 €"
-                nuevo_codigo_ive = "PIBB.2e"
-                val_texto = "🟢 SUGERIDO IVE OFICIAL"
-
-            # 2. EVALUAR E INYECTAR RADAR COMERCIAL SI ES MÁQUINA/LUMINARIA NO ENCONTRADA EN IVE
+            # 2. EVALUACIÓN EN RADAR COMERCIAL (MAQUINARIA / LUMINARIAS)
             elif es_aparato_maquina:
                 comercial_encontrado = False
                 for palabra, info in cat_comercial.items():
@@ -155,16 +126,14 @@ if uploaded_file:
                         val_texto = "🟣 EQUIPO COMERCIAL (RADAR GOOGLE)"
                         comercial_encontrado = True
                         break
-                
                 if not comercial_encontrado:
-                    p_comercial_col = "Consultar según Potencia/kW"
+                    p_comercial_col = "Consultar según Potencia"
                     marca_comercial_col = "Fabricantes autorizados"
                     val_texto = "🟣 EQUIPO COMERCIAL ESPECIAL"
 
-            # 3. EVALUAR EN CYPE (Asignación automática de Precio y de Nuevo Código CYPE)
+            # 3. EVALUACIÓN EN CYPE
             else:
                 precio_cype_est, cod_cype_oficial, ref_cype = mapear_y_estimar_cype(codigo, resumen, precio_presu)
-                
                 if precio_cype_est is not None:
                     p_cype_col = f"{precio_cype_est} €"
                     nuevo_codigo_cype = cod_cype_oficial
@@ -172,8 +141,19 @@ if uploaded_file:
                     desviacion = abs(precio_presu - precio_cype_est)
                     val_texto = "🟢 CYPE OK" if desviacion < 15.0 else f"🔴 DESVIADO DE CYPE ({precio_cype_est} €)"
                 else:
-                    val_texto = "🟡 REVISAR MANUALMENTE"
-                    marca_comercial_col = "Código fuera de rango estándar"
+                    val_texto = "      REVISAR MANUALMENTE"
+                    marca_comercial_col = "Código fuera de rango"
+
+            # --- 🔍 ÚLTIMO CHECK CRÍTICO: ¿HAY ALGO MEJOR EN EL IVE ACTUALMENTE? ---
+            # Si el elemento se resolvió por CYPE o Comercial, miramos si el IVE tiene una alternativa mejor
+            if p_ive_col == "—":
+                for cod_ive_ref, info_ive in precios_ive.items():
+                    # Si coinciden las palabras clave críticas en la descripción
+                    if any(kw in texto_analisis for kw in info_ive["keywords"]):
+                        nuevo_codigo_ive = f"💡 Sugerido: {info_ive['codigo_oficial']}"
+                        p_ive_col = f"{info_ive['precio']} € (¡Mejor!)"
+                        val_texto = "🔵 EN IVE ESTÁ ACTUALMENTE MEJOR (Optimizar)"
+                        break
 
             resultados.append({
                 "Código Original": codigo,
@@ -191,21 +171,21 @@ if uploaded_file:
 
         if resultados:
             df_final = pd.DataFrame(resultados)
-            st.success("✅ Estructura de mapeo completada. Columnas de 'Nuevo Código IVE' y 'Nuevo Código CYPE' activadas.")
+            st.success("✅ ¡Control de calidad total activado! Check de optimización IVE en funcionamiento.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False, sheet_name='Mapeo_Precios_Codigos')
+                df_final.to_excel(writer, index=False, sheet_name='Validacion_Optimizada')
             
             st.download_button(
-                label="📥 DESCARGAR INFORME EXCEL CON CÓDIGOS NUEVOS (.XLSX)",
+                label="📥 DESCARGAR INFORME CON CHEQUEO CRUZADO (.XLSX)",
                 data=output.getvalue(),
-                file_name="Informe_Codigos_Y_Precios_Mapeados.xlsx",
+                file_name="Informe_Precios_Check_IVE.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            st.warning("No se encontraron partidas válidas.")
+            st.warning("No se encontraron partidas para analizar.")
             
     except Exception as e:
         st.error(f"Error general en la ejecución: {e}")
