@@ -4,8 +4,8 @@ import io
 import openpyxl
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
-st.title("🛠️ Revisor de Precios Pro - Formato Bugarra Fijo")
-st.caption("Configuración activa: Lógica indexada por posición exacta de columnas (A=Código, B=Resumen, C=Datos Comerciales).")
+st.title("🛠️ Revisor de Precios Pro - Columna 'datos comerciales' (Bugarra)")
+st.caption("Configuración activa: Mapeo directo desde la columna 'datos comerciales' para el Caso 3.")
 
 # --- PREFIJOS MAESTROS IVE PARA DETECCIÓN ---
 codigos_ive_referencia = ["0AF010", "EIEB20", "DRT030", "EIEC", "PIBB", "DAISA"]
@@ -28,38 +28,42 @@ if uploaded_file:
         file_bytes = uploaded_file.read()
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
         
-        # Buscamos 'Hoja5' o en su defecto la activa para no fallar
         if 'Hoja5' in wb.sheetnames:
             ws = wb['Hoja5']
         else:
             ws = wb.active
+            
+        df_temp = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ws.title)
+        df_temp.columns = [str(c).strip().lower() for c in df_temp.columns]
+        
+        # --- DETECCIÓN DINÁMICA DE COLUMNAS ---
+        col_codigo_idx = next((i for i, c in enumerate(df_temp.columns) if "cod" in c or "presupuesto" in c or "unnamed: 0" in c), 0)
+        col_resumen_idx = next((i for i, c in enumerate(df_temp.columns) if "res" in c or "desc" in c or "unnamed: 3" in c), 2)
+        
+        # Busca exactamente tu columna "datos comerciales"
+        col_comercial_idx = next((i for i, c in enumerate(df_temp.columns) if "datos comerciales" in c or "comercial" in c), None)
 
-        # Determinamos de forma fija las posiciones basadas en tu captura real:
-        # Columna A (1) = Código | Columna B (2) = Resumen | Columna C (3) = DATOS COMERCIALES
-        col_codigo_idx = 1      # Columna A
-        col_resumen_idx = 2     # Columna B
-        col_comercial_idx = 3   # Columna C
-
-        # La nueva columna de revisión se añade al final de la tabla existente (Derecha)
         col_ia_destino = ws.max_column + 1
         ws.cell(row=1, column=col_ia_destino, value="REVISIÓN IA").font = openpyxl.styles.Font(bold=True, color="0000FF")
 
         resultados_vista = []
 
-        # Recorremos las filas desde la 2 hasta el final
         for row_idx in range(2, ws.max_row + 1):
-            codigo = str(ws.cell(row=row_idx, column=col_codigo_idx).value or '').strip()
-            resumen = str(ws.cell(row=row_idx, column=col_resumen_idx).value or '').strip()
-            valor_comercial = str(ws.cell(row=row_idx, column=col_comercial_idx).value or '').strip().lower()
+            codigo = str(ws.cell(row=row_idx, column=col_codigo_idx + 1).value or '').strip()
+            resumen = str(ws.cell(row=row_idx, column=col_resumen_idx + 1).value or '').strip()
             
-            # Detectar si es una fila vacía o de títulos de familias/capítulos sin código real
-            if codigo == "" or codigo.lower() == "none" or codigo.lower() == "código" or "capítulo" in codigo.lower():
+            # Leer de la columna "datos comerciales"
+            valor_comercial = ""
+            if col_comercial_idx is not None:
+                valor_comercial = str(ws.cell(row=row_idx, column=col_comercial_idx + 1).value or '').strip().lower()
+            
+            if codigo == "" or codigo.lower() == "none" or codigo.lower() == "código" or "capítulo" in codigo.lower() or "total" in resumen.lower():
                 continue
 
             val_texto = ""
             codigo_upper = codigo.upper()
 
-            # --- PRIORIDAD 1: CASO 3 (Si la columna C 'DATOS COMERCIALES' tiene contenido) ---
+            # --- CASO 3: ELEMENTOS COMERCIALES ---
             if valor_comercial != "":
                 if valor_comercial in cat_comercial:
                     info = cat_comercial[valor_comercial]
@@ -67,40 +71,36 @@ if uploaded_file:
                 else:
                     val_texto = f"🟣 EQUIPO COMERCIAL (Rama nueva: {valor_comercial}). Revisar marcas autorizadas en el proyecto."
 
-            # --- PRIORIDAD 2: ANÁLISIS DE CÓDIGOS (Si la columna C está vacía) ---
-            else:
-                # CASO 1: Código Nativo IVE
-                if any(ive_ref in codigo_upper for ive_ref in codigos_ive_referencia) or (len(codigo) >= 6 and codigo[0].isdigit() and codigo[1].isalpha()):
-                    val_texto = "Código IVE Para precios se deberían de usar de la base de precios del IVE actual."
+            # --- CASO 1: CÓDIGO NATIVO IVE ---
+            elif any(ive_ref in codigo_upper for ive_ref in codigos_ive_referencia) or (len(codigo) >= 6 and codigo[0].isdigit() and codigo[1].isalpha()):
+                val_texto = "Código IVE Para precios se deberían de usar de la base de precios del IVE actual."
 
-                # CASO 2: Estructuras reconocibles de CYPE (llevan puntos, guiones o son largas tipo DISAN_04)
-                elif any(c in codigo_upper for c in [".", "-", "_"]) or len(codigo) >= 5:
+            # --- CASOS 2 y 4: CYPE VS INVENTADO ---
+            else:
+                if any(c in codigo_upper for c in [".", "-"]) or len(codigo) >= 5:
                     val_texto = "Código CYPE Para precios se deberían de usar de la base de precios del IVE, son superiores y más acorde al mercado"
-                
-                # CASO 4: Código Erróneo / Inventado / Roto
                 else:
                     val_texto = "❌ CODIGO ERRONEO / INVENTADO | Cotejar con IVE"
 
-            # Inyectamos el dictamen en la nueva columna a la derecha de la fila correspondiente
+            # Guardar celda en el Excel
             ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
             
-            # Guardamos una copia limpia para la previsualización en la web de Streamlit
             resultados_vista.append({
-                "Código (Col A)": codigo,
-                "Descripción (Col B)": resumen[:30] + "...",
-                "Datos Comerciales (Col C)": valor_comercial if valor_comercial != "" else "—",
-                "Resultado REVISIÓN IA": val_texto
+                "Código Original": codigo,
+                "Descripción": resumen[:30] + "...",
+                "Datos Comerciales": valor_comercial if valor_comercial != "" else "—",
+                "Resultado Columna IA": val_texto
             })
 
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
 
-        st.success("✅ ¡Corregido al 100%! Lógica de comerciales blindada y formato original respetado.")
+        st.success("✅ ¡Hecho! El motor está completamente sincronizado con tu columna 'datos comerciales'.")
         st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
         
         st.download_button(
-            label="📥 DESCARGAR EXCEL REVISADO (.XLSX)",
+            label="📥 DESCARGAR EXCEL ACTUALIZADO (.XLSX)",
             data=output.getvalue(),
             file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_IA.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
