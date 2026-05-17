@@ -6,7 +6,7 @@ import urllib.parse
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
 st.title("🛠️ Revisor de Precios Pro - Cruce Total (CYPE vs IVE Valencia)")
-st.caption("Configuración activa: Caso 3 con extracción de Precio y Link Real de Internet.")
+st.caption("Configuración activa: Caso 3 con Multibuscador Profesional (Matmax, Obramat y Google).")
 
 # --- BANCO DE PRECIOS INTEGRADO IVE (VALENCIA - JULIO 2025) ---
 precios_ive = {
@@ -25,15 +25,15 @@ precios_ive = {
     "DAISA.07A": {"precio": 16.23, "codigo_oficial": "DAISA.07A", "keywords": ["accesorio", "naos", "ket"]}
 }
 
-# --- MOTOR DE BÚSQUEDA WEB CON GENERACIÓN DE LINKS REALES ---
-def buscar_en_google_y_extraer_link(resumen, info_comercial):
+# --- MULTIBUSCADOR COMERCIAL AVANZADO (Caso 3) ---
+def generar_multibuscador_comercial(resumen, info_comercial):
     """
-    Rastrea la información comercial y la descripción para asignar el precio web real
-    junto con el link directo a la fuente de información o catálogo.
+    Rastrea el catálogo interno o genera pasarelas de enlaces directos a las 
+    principales webs de distribución y tarifas profesionales de España.
     """
     texto_busqueda = f"{info_comercial} {resumen}".lower()
     
-    # Mapeo de bases de datos comerciales reales indexadas en España
+    # 1. Catálogo interno directo por si es una marca prémium exacta
     catalogo_web = {
         "carandini": {"precio": "185.00 €", "url": "https://www.carandini.com/es/productos/"},
         "veka": {"precio": "185.00 €", "url": "https://www.veka.es/ventanas-veka/"},
@@ -60,15 +60,24 @@ def buscar_en_google_y_extraer_link(resumen, info_comercial):
     
     for clave, datos in catalogo_web.items():
         if clave in texto_busqueda:
-            return f"Precio mercado web: {datos['precio']} | Link fuente: {datos['url']}"
+            return f"Precio catálogo: {datos['precio']} | Web oficial: {datos['url']}"
             
-    # Si no está en la lista pre-indexada, construimos un enlace de búsqueda directa en Google Shoppingizado
-    # para que el usuario no pierda el tiempo y vaya directo al buscador real con un solo clic.
-    query_segura = urllib.parse.quote(f"{info_comercial} {resumen}")
-    link_directo_google = f"https://www.google.com/search?q={query_segura}"
+    # 2. Si es una referencia genérica o no indexada, preparamos las queries seguras
+    query_comercial = f"{info_comercial} {resumen}"
+    query_encoded = urllib.parse.quote(query_comercial)
     
-    # Condición estricta: Avisar que el elemento exacto no está indexado con tarifa fija pero dar la pasarela web
-    return f"Elemento no encontrado en base web directa. Buscar en: {link_directo_google}"
+    # Construcción de pasarelas de enlaces profesionales
+    url_matmax = f"https://www.matmax.es/search?q={query_encoded}"
+    url_obramat = f"https://www.google.com/search?q=site:obramat.es+{query_encoded}"
+    url_shopping = f"https://www.google.com/search?q={query_encoded}&tbm=shop"
+    
+    # Texto limpio estructurado que se inyectará en la Columna IA del Excel
+    return (
+        f"Buscar precio profesional en: "
+        f"[MATMAX]({url_matmax}) | "
+        f"[OBRAMAT]({url_obramat}) | "
+        f"[GOOGLE SHOPPING]({url_shopping})"
+    )
 
 
 uploaded_file = st.file_uploader("Sube tu Excel de Bugarra", type=["xlsx"])
@@ -110,57 +119,47 @@ if uploaded_file:
 
             val_texto = ""
             codigo_upper = codigo.upper()
-            texto_analisis = (codigo + " " + resumen).lower()
 
             tiene_info_comercial = valor_comercial != "" and valor_comercial.lower() != "none"
 
             # --- CASO 3: PRIORIDAD ABSOLUTA SI LA COLUMNA C TIENE INFO ---
             if tiene_info_comercial:
-                # El motor extrae el precio y la URL correspondiente
-                val_texto = buscar_en_google_y_extraer_link(resumen, valor_comercial)
+                val_texto = generar_multibuscador_comercial(resumen, valor_comercial)
 
             # --- SI LA COLUMNA C ESTÁ VACÍA, EJECUTA LOS CASOS RESTANTES ---
             else:
+                # --- CASO 1: ANÁLISIS DE BASE DIRECTA IVE ---
                 if codigo in precios_ive:
-                    p_ive_col = f"{precios_ive[codigo]['precio']} €"
-                    if precio_presu <= precios_ive[codigo]['precio']:
-                        val_texto = f"🟢 IVE OK. Presupuesto cubierto ({p_ive_col})."
-                    else:
-                        val_texto = f"🔴 ALERTA: PRESUPUESTO SUPERA AL IVE ({p_ive_col})."
-                    
-                    for cod_ive_ref, info_ive in precios_ive.items():
-                        if any(kw in texto_analisis for kw in info_ive["keywords"]):
-                            p_ive_col = f"{info_ive['precio']} €"
-                            if info_ive["precio"] > precio_presu:
-                                val_texto = f"🔵 RECOMENDADO OPTIMIZAR: En IVE Valencia se paga a {p_ive_col} (¡Código Oficial: {cod_ive_ref} te da más margen!)."
-                            break
+                    val_texto = "Código IVE revisar si el precio es actual."
                 
+                # --- CASO 2: SI DETECTA QUE ES UN CYPE ---
                 elif any(c in codigo_upper for c in [".", "-", "_"]) or len(codigo_upper) > 6:
-                    val_texto = "Código CYPE revisar con IVE"
+                    val_texto = "Código CYPE Para precios se deberían de usar de la base de precios del IVE, son superiores y más acorde al mercado."
                 
+                # --- CASO 4: CÓDIGO ERRÓNEO O NO IDENTIFICADO ---
                 else:
                     val_texto = "🔍 REVISAR MANUALMENTE."
 
-            # Guardamos el resultado con el Link directo en la nueva columna del Excel
+            # Guardamos el resultado en la celda del Excel original
             ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
             
             resultados_vista.append({
                 "Partida": codigo,
                 "Datos Comerciales (Col C)": valor_comercial if tiene_info_comercial else "Vacío",
-                "Dictamen / Link Columna IA": val_texto
+                "Dictamen / Enlaces Generados": val_texto
             })
 
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
 
-        st.success("✅ ¡Hecho! Columna IA armada con los precios y links de verificación correspondientes.")
+        st.success("🚀 ¡Brutal! Despliegue completado. El Caso 3 ahora es un Multibuscador Profesional.")
         st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
         
         st.download_button(
-            label="📥 DESCARGAR TU EXCEL CON LINKS DE VERIFICACIÓN (.XLSX)",
+            label="📥 DESCARGAR TU EXCEL CON ACCESO A PORTALES PROFESIONALES (.XLSX)",
             data=output.getvalue(),
-            file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_IA_Con_Links.xlsx",
+            file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_IA_Buscador.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
             
