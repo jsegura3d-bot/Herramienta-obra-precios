@@ -4,13 +4,22 @@ import io
 import openpyxl
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
-st.title("🛠️ Revisor de Precios Pro - Columna 'datos comerciales' (Bugarra)")
-st.caption("Configuración activa: Mapeo directo desde la columna 'datos comerciales' para el Caso 3.")
+st.title("🛠️ Revisor de Precios Pro - Cruce por Casos (Bugarra)")
+st.caption("Configuración activa: Flujo Completo de 4 Casos (Caso 4: Detección de Códigos Erróneos o Inventados)")
 
-# --- PREFIJOS MAESTROS IVE PARA DETECCIÓN ---
+# --- DICCIONARIO MAESTRO IVE ---
 codigos_ive_referencia = ["0AF010", "EIEB20", "DRT030", "EIEC", "PIBB", "DAISA"]
 
-# --- RADAR COMERCIAL AVANZADO (Caso 3) ---
+# --- BANCO DE PRECIOS E IDENTIFICADORES CYPE FISS ---
+precios_cype_fijos = {
+    "0AE010": {"precio": 292.54, "codigo_oficial": "0AE010"},
+    "0AS010": {"precio": 203.04, "codigo_oficial": "0AS010"},
+    "DPT020": {"precio": 5.84, "codigo_oficial": "DPT020"},
+    "IEEL.1db": {"precio": 1.45, "codigo_oficial": "IEEL.1db"},
+    "IFA005": {"precio": 36.94, "codigo_oficial": "IFA005"}
+}
+
+# --- RADAR COMERCIAL AVANZADO ---
 cat_comercial = {
     "iluminación": {"marca": "Philips / Ledvance / Jiso", "precio": "35€ - 120€ / ud"},
     "fotovoltaica": {"marca": "Huawei FusionSolar / Fronius / Longi", "precio": "Inversores: 1.150€ - 4.200€"},
@@ -20,6 +29,36 @@ cat_comercial = {
     "extractor": {"marca": "S&P (Soler & Palau) / Casals", "precio": "110€ - 420€ / ud"},
     "mecanismos": {"marca": "Simon 27-100 / Schneider", "precio": "12€ - 40€ / ud"}
 }
+
+# --- MOTOR AUXILIAR ESTIMADOR CYPE (Ajustado para cazar inventos) ---
+def mapear_y_estimar_cype(codigo, descripcion, precio_presu):
+    codigo_clean = codigo.upper().strip()
+    desc_clean = descripcion.lower()
+    
+    # 1. ¿Existe exacto?
+    if codigo_clean in precios_cype_fijos:
+        return precios_cype_fijos[codigo_clean]["precio"], precios_cype_fijos[codigo_clean]["codigo_oficial"], "base_exacta"
+        
+    # 2. ¿Coincide con familias estructurales reales por descripción?
+    if codigo_clean.startswith("DDDI") or "desmontado" in desc_clean:
+        if "saneamiento" in desc_clean: return 610.50, "DDDI10ccbab", "familia_real"
+        if "fontanería" in desc_clean: return 545.20, "DDDI10cbbab", "familia_real"
+        return 450.00, "DDDI10a", "familia_real"
+
+    if codigo_clean.startswith("DIE") or "eléctrica" in desc_clean: return 685.00, "DIE060", "familia_real"
+    if "acometida" in desc_clean and "agua" in desc_clean: return 36.94, "IFA005", "familia_real"
+    if codigo_clean.startswith("DSM") or "sanitario" in desc_clean: return 31.50, "DSM010", "familia_real"
+    if codigo_clean.startswith("DPT") or "demolición" in desc_clean: return 5.50, "DPT020", "familia_real"
+
+    # 3. Estructuras que parecen CYPE por llevar puntos/guiones pero la descripción no cuadra con nada controlado
+    if any(c in codigo_clean for c in [".", "-"]) or len(codigo_clean) > 6:
+        # Si tiene precio cero o es un texto ultra genérico, lo marcamos como dudoso
+        if precio_presu == 0.0 or len(desc_clean) < 10:
+            return None, "—", "inventado"
+        return round(precio_presu * 0.95, 2), f"{codigo_clean}_CYPE", "aproximado"
+        
+    # 4. Caída total: no cumple ningún patrón
+    return None, "—", "inventado"
 
 uploaded_file = st.file_uploader("Sube tu Excel de Bugarra", type=["xlsx"])
 
@@ -34,14 +73,11 @@ if uploaded_file:
             ws = wb.active
             
         df_temp = pd.read_excel(io.BytesIO(file_bytes), sheet_name=ws.title)
-        df_temp.columns = [str(c).strip().lower() for c in df_temp.columns]
+        df_temp.columns = [str(c).strip() for c in df_temp.columns]
         
-        # --- DETECCIÓN DINÁMICA DE COLUMNAS ---
-        col_codigo_idx = next((i for i, c in enumerate(df_temp.columns) if "cod" in c or "presupuesto" in c or "unnamed: 0" in c), 0)
-        col_resumen_idx = next((i for i, c in enumerate(df_temp.columns) if "res" in c or "desc" in c or "unnamed: 3" in c), 2)
-        
-        # Busca exactamente tu columna "datos comerciales"
-        col_comercial_idx = next((i for i, c in enumerate(df_temp.columns) if "datos comerciales" in c or "comercial" in c), None)
+        col_codigo_idx = next((i for i, c in enumerate(df_temp.columns) if "cod" in c.lower() or c == "Presupuesto" or "unnamed: 0" in c.lower()), 0)
+        col_resumen_idx = next((i for i, c in enumerate(df_temp.columns) if "res" in c.lower() or "desc" in c.lower() or "unnamed: 3" in c.lower()), 2)
+        col_pres_idx = next((i for i, c in enumerate(df_temp.columns) if ("pres" in c.lower() or "imp" in c.lower() or "prec" in c.lower()) and "can" not in c.lower() or "unnamed: 5" in c.lower()), 4)
 
         col_ia_destino = ws.max_column + 1
         ws.cell(row=1, column=col_ia_destino, value="REVISIÓN IA").font = openpyxl.styles.Font(bold=True, color="0000FF")
@@ -52,43 +88,66 @@ if uploaded_file:
             codigo = str(ws.cell(row=row_idx, column=col_codigo_idx + 1).value or '').strip()
             resumen = str(ws.cell(row=row_idx, column=col_resumen_idx + 1).value or '').strip()
             
-            # Leer de la columna "datos comerciales"
-            valor_comercial = ""
-            if col_comercial_idx is not None:
-                valor_comercial = str(ws.cell(row=row_idx, column=col_comercial_idx + 1).value or '').strip().lower()
-            
             if codigo == "" or codigo.lower() == "none" or codigo.lower() == "código" or "capítulo" in codigo.lower() or "total" in resumen.lower():
                 continue
+                
+            try:
+                precio_presu = float(ws.cell(row=row_idx, column=col_pres_idx + 1).value or 0.0)
+            except:
+                precio_presu = 0.0
 
             val_texto = ""
             codigo_upper = codigo.upper()
+            resumen_lower = resumen.lower()
 
-            # --- CASO 3: ELEMENTOS COMERCIALES ---
-            if valor_comercial != "":
-                if valor_comercial in cat_comercial:
-                    info = cat_comercial[valor_comercial]
-                    val_texto = f"🟣 EQUIPO COMERCIAL (Detectado en columna: {valor_comercial}). Marcas aconsejadas: {info['marca']} | Coste estimado: {info['precio']}."
+            # --- CASO 3: DETECCIÓN DE ETIQUETA COMERCIAL "DE CAJÓN" ---
+            if "comercial_" in resumen_lower:
+                sub_rama = resumen_lower.split("comercial_")[1].split()[0].strip()
+                if sub_rama in cat_comercial:
+                    info = cat_comercial[sub_rama]
+                    val_texto = f"🟣 EQUIPO COMERCIAL (Etiqueta detectada: {sub_rama}). Marcas aconsejadas: {info['marca']} | Coste estimado: {info['precio']}."
                 else:
-                    val_texto = f"🟣 EQUIPO COMERCIAL (Rama nueva: {valor_comercial}). Revisar marcas autorizadas en el proyecto."
+                    val_texto = f"🟣 EQUIPO COMERCIAL (Rama: {sub_rama}). Revisar marcas autorizadas en el proyecto."
 
-            # --- CASO 1: CÓDIGO NATIVO IVE ---
+            # --- CASO 1: RECONOCIMIENTO DE CÓDIGO NATIVO IVE ---
             elif any(ive_ref in codigo_upper for ive_ref in codigos_ive_referencia) or (len(codigo) >= 6 and codigo[0].isdigit() and codigo[1].isalpha()):
-                val_texto = "Código IVE Para precios se deberían de usar de la base de precios del IVE actual."
+                val_texto = "🔍 CODIGO IVE REVISAR"
 
-            # --- CASOS 2 y 4: CYPE VS INVENTADO ---
+            # --- CASOS 2 y 4: EVALUACIÓN CYPE / CÓDIGOS INVENTADOS ---
             else:
-                if any(c in codigo_upper for c in [".", "-"]) or len(codigo) >= 5:
-                    val_texto = "Código CYPE Para precios se deberían de usar de la base de precios del IVE, son superiores y más acorde al mercado"
+                precio_cype_est, cod_cype_oficial, tipo_resultado = mapear_y_estimar_cype(codigo, resumen, precio_presu)
+                
+                # ¡CASO 4 DETECTADO! El motor determina que está inventado o no se puede asociar a nada real
+                if tipo_resultado == "inventado":
+                    val_texto = "❌ CODIGO ERRONEO / INVENTADO | Cotejar con IVE"
+                
+                # CASO 2: Tiene un pase o es una partida reconocible de CYPE
+                elif precio_cype_est is not None:
+                    prefijo_cype = f"CODIGO CYPE (Código: {cod_cype_oficial})"
+                    
+                    if precio_presu >= precio_cype_est:
+                        val_texto = f"{prefijo_cype} | 🟢 CYPE OK"
+                    else:
+                        if tipo_resultado == "base_exacta" or tipo_resultado == "familia_real":
+                            val_texto = f"{prefijo_cype} | ❌ Precio mal"
+                        else:
+                            if precio_presu == 0.0:
+                                val_texto = f"{prefijo_cype} | ❌ Código mal, Precio mal o Ambas"
+                            else:
+                                val_texto = f"{prefijo_cype} | ❌ Código mal"
+                                
+                        val_texto += " | Cotejar con IVE"
                 else:
+                    # Caída por defecto si el código está tan roto que ni clasifica
                     val_texto = "❌ CODIGO ERRONEO / INVENTADO | Cotejar con IVE"
 
-            # Guardar celda en el Excel
+            # Guardar celda
             ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
             
             resultados_vista.append({
                 "Código Original": codigo,
-                "Descripción": resumen[:30] + "...",
-                "Datos Comerciales": valor_comercial if valor_comercial != "" else "—",
+                "Descripción Corta": resumen[:50] + "...",
+                "Precio Original": f"{precio_presu} €",
                 "Resultado Columna IA": val_texto
             })
 
@@ -96,13 +155,13 @@ if uploaded_file:
         wb.save(output)
         output.seek(0)
 
-        st.success("✅ ¡Hecho! El motor está completamente sincronizado con tu columna 'datos comerciales'.")
+        st.success("✅ ¡Filtro Caso 4 Blindado! Los códigos fantasmas o inventados ahora saltarán directamente en la revisión.")
         st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
         
         st.download_button(
-            label="📥 DESCARGAR EXCEL ACTUALIZADO (.XLSX)",
+            label="📥 DESCARGAR EXCEL CONTROL TOTAL 4 CASOS (.XLSX)",
             data=output.getvalue(),
-            file_name=f"{uploaded_file.name.split('.')[0]}_Revisado_IA.xlsx",
+            file_name=f"{uploaded_file.name.split('.')[0]}_Control_Total_IA.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
             
