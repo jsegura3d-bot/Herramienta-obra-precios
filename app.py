@@ -5,7 +5,7 @@ import openpyxl
 
 st.set_page_config(page_title="Revisor IVE BDC25 - Valencia", layout="wide")
 st.title("🛠️ Revisor de Precios Pro - Cruce por Casos (Bugarra)")
-st.caption("Configuración activa: Flujo estricto por Casos (Etiqueta fija 'CODIGO CYPE' integrada en el Caso 2)")
+st.caption("Configuración activa: Flujo estricto por Casos (IVE directo, CYPE con desglose de fallos y Etiquetas Comerciales Inteligentes)")
 
 # --- DICCIONARIO MAESTRO IVE (Para detectar si el código pertenece a esta base) ---
 codigos_ive_referencia = ["0AF010", "EIEB20", "DRT030", "EIEC", "PIBB", "DAISA"]
@@ -96,40 +96,46 @@ if uploaded_file:
 
             # --- CASO 3: DETECCIÓN DE TU ETIQUETA COMERCIAL "DE CAJÓN" ---
             if "comercial_" in resumen_lower:
+                # Extraemos la rama que pusiste (ej: comercial_iluminación -> iluminación)
                 sub_rama = resumen_lower.split("comercial_")[1].split()[0].strip()
                 
                 if sub_rama in cat_comercial:
                     info = cat_comercial[sub_rama]
                     val_texto = f"🟣 EQUIPO COMERCIAL (Etiqueta detectada: {sub_rama}). Marcas aconsejadas: {info['marca']} | Coste estimado: {info['precio']}."
                 else:
+                    # Si pones una etiqueta genérica o nueva que no esté en la lista corta
                     val_texto = f"🟣 EQUIPO COMERCIAL (Rama: {sub_rama}). Revisar marcas autorizadas en el proyecto."
 
             # --- CASO 1: RECONOCIMIENTO DE CÓDIGO NATIVO IVE ---
             elif any(ive_ref in codigo_upper for ive_ref in codigos_ive_referencia) or (len(codigo) >= 6 and codigo[0].isdigit() and codigo[1].isalpha()):
-                val_texto = "🔍 CODIGO IVE REVISAR"
+                val_texto = "🔍 REVISAR PRECIO"
 
             # --- CASO 2: RECONOCIMIENTO DE CÓDIGO CYPE ---
             else:
                 precio_cype_est, codigo_existe_en_base = mapear_y_estimar_cype(codigo, resumen, precio_presu)
                 
                 if precio_cype_est is not None:
-                    # Siempre añadimos el prefijo fijo 'CODIGO CYPE' solicitado
+                    # Si tu presupuesto es mayor o igual, el precio está blindado (no hay alerta de pérdida)
                     if precio_presu >= precio_cype_est:
-                        val_texto = "CODIGO CYPE | 🟢 CYPE OK"
+                        val_texto = "🟢 CYPE OK"
                     else:
+                        # Si tu precio está por debajo, evaluamos qué está fallando exactamente
                         if codigo_existe_en_base:
-                            val_texto = "CODIGO CYPE | ❌ Precio mal"
+                            val_texto = "❌ Precio mal"
                         else:
+                            # Si el código es una estructura rara y encima el precio no cubre la estimación estándar
                             if precio_presu == 0.0:
-                                val_texto = "CODIGO CYPE | ❌ Código mal, Precio mal o Ambas"
+                                val_texto = "❌ Código mal, Precio mal o Ambas"
                             else:
-                                val_texto = "CODIGO CYPE | ❌ Código mal"
+                                val_texto = "❌ Código mal"
                                 
+                        # Colatilla obligatoria solicitada al final de los fallos de CYPE
                         val_texto += " | Cotejar con IVE"
                 else:
-                    val_texto = "CODIGO CYPE | 🔍 REVISAR MANUALMENTE | Cotejar con IVE"
+                    # Caída de seguridad por si no entra en ningún patrón claro
+                    val_texto = "🔍 REVISAR MANUALMENTE | Cotejar con IVE"
 
-            # Inyectamos el dictamen final en la celda del Excel original
+            # Inyectamos el dictamen final en la celda del Excel original respetando todo lo demás
             ws.cell(row=row_idx, column=col_ia_destino, value=val_texto)
             
             resultados_vista.append({
@@ -143,11 +149,11 @@ if uploaded_file:
         wb.save(output)
         output.seek(0)
 
-        st.success("✅ ¡Actualizado! Las partidas de CYPE ahora se clasifican de forma homogénea con la etiqueta 'CODIGO CYPE'.")
+        st.success("✅ ¡Actualización completada! El motor ahora responde de forma estricta a tus tres casos de control.")
         st.dataframe(pd.DataFrame(resultados_vista), use_container_width=True)
         
         st.download_button(
-            label="📥 DESCARGAR EXCEL AJUSTADO (.XLSX)",
+            label="📥 DESCARGAR EXCEL AJUSTADO POR CASOS (.XLSX)",
             data=output.getvalue(),
             file_name=f"{uploaded_file.name.split('.')[0]}_Casos_IA.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
