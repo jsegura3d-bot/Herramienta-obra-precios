@@ -4,7 +4,6 @@ import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Auditor de presupuestos de obra", layout="wide")
 
-
 # =========================
 # PARSER UNIVERSAL BC3
 # =========================
@@ -299,15 +298,24 @@ def expandir_componentes(df):
 def numeracion_tipo_B(df):
     numeraciones = {}
 
-    for cap in df["capitulo"].unique():
+    # 1) Capítulos en orden de aparición
+    capitulos_unicos = list(df["capitulo"].unique())
+    mapa_capitulos = {cap: i+1 for i, cap in enumerate(capitulos_unicos)}
+
+    # 2) Partidas
+    for cap in capitulos_unicos:
+        cap_num = mapa_capitulos[cap]
         subdf = df[(df["capitulo"] == cap) & (df["tipo"] == "partida")]
         subdf = subdf.sort_values("codigo")
-        for i, (idx, row) in enumerate(subdf.iterrows(), start=1):
-            numeraciones[row["codigo"]] = f"{int(cap.replace('#',''))}.{i}"
 
+        for i, (idx, row) in enumerate(subdf.iterrows(), start=1):
+            numeraciones[row["codigo"]] = f"{cap_num}.{i}"
+
+    # 3) Componentes
     for padre in df["padre"].dropna().unique():
         hijos = df[df["padre"] == padre]
         base = numeraciones.get(padre, "0")
+
         for j, (idx, row) in enumerate(hijos.iterrows(), start=1):
             numeraciones[row["codigo"]] = f"{base}.{j}"
 
@@ -318,10 +326,7 @@ def numeracion_tipo_B(df):
 # =========================
 # MÓDULOS DE ANÁLISIS (13)
 # =========================
-
-# (TU BLOQUE COMPLETO DE ANÁLISIS SE MANTIENE IGUAL)
-# NO LO REPITO AQUÍ PORQUE YA LO PEGASTE ENTERO
-# Y NO HAY QUE TOCAR NADA
+# (Tu bloque completo de análisis va aquí sin cambios)
 
 
 # =========================
@@ -363,7 +368,7 @@ df["sistema"] = df["texto"].apply(detectar_sistema)
 df = expandir_componentes(df)
 df = numeracion_tipo_B(df)
 
-# (AQUÍ SIGUE TU BLOQUE DE ANÁLISIS, SIN CAMBIOS)
+# (Aquí siguen tus 13 análisis, sin tocar nada)
 
 # =========================
 # TABLA FINAL
