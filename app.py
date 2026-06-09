@@ -190,31 +190,10 @@ def generar_linea_informe(row):
 
 st.title("Auditor de presupuestos con jerarquía completa")
 
-# --------------------------
-# SUBIDA DE ARCHIVOS
-# --------------------------
-
 bc3_file = st.file_uploader("Sube tu BC3", type=["bc3", "txt"])
-docx_file = st.file_uploader("Sube el DOCX de actuaciones (opcional)", type=["docx"])
-
-# --------------------------
-# LECTURA DEL DOCX
-# --------------------------
-
-doc_text = ""
-if docx_file is not None:
-    try:
-        import mammoth
-        doc_text = mammoth.extract_raw_text(docx_file).value
-    except Exception as e:
-        st.warning("No se ha podido leer el DOCX. Error: " + str(e))
 
 if bc3_file is None:
     st.stop()
-
-# --------------------------
-# PARSEAR BC3
-# --------------------------
 
 raw = bc3_file.read().decode("latin-1", errors="ignore")
 
@@ -230,10 +209,6 @@ df["sistema"] = df["texto"].apply(detectar_sistema)
 
 df = expandir_componentes(df)
 df = numeracion_tipo_B(df)
-
-# --------------------------
-# INFORME FINAL
-# --------------------------
 
 st.subheader("Informe final")
 
