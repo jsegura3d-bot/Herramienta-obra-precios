@@ -1,63 +1,67 @@
-import io
-import re
-from collections import defaultdict
-
 import streamlit as st
 import pandas as pd
+import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Auditor de presupuestos de obra", layout="wide")
 
 
 # =========================
-# PARSER BC3 (MVP COMPLETO)
+# PARSER UNIVERSAL BC3
 # =========================
 
-def parse_bc3(file_bytes: bytes) -> pd.DataFrame:
+def detectar_formato_bc3(text: str) -> str:
+    lines = text.splitlines()
+    sample = lines[:200]
+
+    # Presto (~V|, ~C|, ~D|, ~T|)
+    if any(l.startswith("~V|") for l in sample) and any(l.startswith("~C|") for l in sample):
+        return "presto"
+
+    # Arquímedes (C;..., L;..., D;...)
+    if any(l.startswith("C;") or l.startswith("L;") for l in sample):
+        return "arquimedes"
+
+    # CYPE (|P| en la segunda columna)
+    if any("|P|" in l for l in sample):
+        return "cype"
+
+    # XML (TCQ, Menfis, etc.)
+    if any("<ITEM>" in l or "<BC3" in l for l in sample):
+        return "xml"
+
+    return "desconocido"
+
+
+def parse_presto(text: str) -> pd.DataFrame:
     """
-    Parser BC3 muy simplificado orientado a MVP.
-    Asume:
-      - Líneas de partidas con tipo 'C' (capítulos) y 'L' (líneas/partidas).
-      - Formato típico: TIPO;CODIGO;TEXTO;UNIDAD;CANTIDAD;PRECIO;IMPORTE;...
-      - Líneas de descomposición con referencia a código padre.
-    ADÁPTALO a tu formato real de BC3 si difiere.
+    Adaptado al formato que has pegado:
+    - ~C|codigo|unidad|texto|precio...  -> partidas
+    - ~T|codigo|texto_largo             -> texto detallado
+    - ~D|codigo_capitulo|...           -> descomposición (no la usamos aún)
     """
-    text = file_bytes.decode("latin-1", errors="ignore")
+    partidas = {}
     lines = text.splitlines()
 
-    partidas = []
-    descomp_por_codigo = defaultdict(list)
+    for line in lines:
+        if line.startswith("~C|"):
+            parts = line.split("|")
+            # Ejemplos:
+            # ~C|001#||DEMOLICIONES|5463.96|...
+            # ~C|002001|Ud|Verificación/reparación instalación eléctrica|909.28|...
+            if len(parts) >= 5:
+                codigo = parts[1].strip()
+                unidad = parts[2].strip()
+                texto = parts[3].strip()
+                try:
+                    precio = float(parts[4].replace(",", "."))
+                except ValueError:
+                    precio = 0.0
 
-    # Ejemplo de patrones muy genéricos (ajustar a tu BC3 real)
-    # Supongamos:
-    # P;CODIGO;TEXTO;UNIDAD;CANTIDAD;PRECIO;IMPORTE
-    # D;COD_PADRE;TIPO(M,MdO,Ma);DESCRIPCION;CANTIDAD;PRECIO
-    for raw in lines:
-        parts = raw.split(";")
-        if len(parts) < 2:
-            continue
+                # Para partidas tipo Ud, tomamos cantidad=1 y importe=precio (MVP)
+                cantidad = 1.0
+                importe = precio
 
-        tipo = parts[0].strip().upper()
-
-        # Partida principal
-        if tipo == "P" and len(parts) >= 7:
-            codigo = parts[1].strip()
-            texto = parts[2].strip()
-            unidad = parts[3].strip()
-            try:
-                cantidad = float(parts[4].replace(",", ".") or 0)
-            except ValueError:
-                cantidad = 0.0
-            try:
-                precio = float(parts[5].replace(",", ".") or 0)
-            except ValueError:
-                precio = 0.0
-            try:
-                importe = float(parts[6].replace(",", ".") or 0)
-            except ValueError:
-                importe = cantidad * precio
-
-            partidas.append(
-                {
+                partidas[codigo] = {
                     "codigo": codigo,
                     "texto": texto,
                     "unidad": unidad,
@@ -68,54 +72,157 @@ def parse_bc3(file_bytes: bytes) -> pd.DataFrame:
                     "descomp_mano_obra": [],
                     "descomp_maquinaria": [],
                 }
-            )
 
-        # Descomposición
-        elif tipo == "D" and len(parts) >= 6:
-            cod_padre = parts[1].strip()
-            tipo_comp = parts[2].strip().upper()  # M, MO, MAQ...
-            desc = parts[3].strip()
-            try:
-                cant = float(parts[4].replace(",", ".") or 0)
-            except ValueError:
-                cant = 0.0
-            try:
-                prec = float(parts[5].replace(",", ".") or 0)
-            except ValueError:
-                prec = 0.0
+        elif line.startswith("~T|"):
+            parts = line.split("|")
+            # ~T|002001|Texto largo...
+            if len(parts) >= 3:
+                codigo = parts[1].strip()
+                texto_largo = parts[2].strip()
+                if codigo in partidas:
+                    # concatenamos texto corto + texto largo
+                    base = partidas[codigo]["texto"]
+                    if base:
+                        partidas[codigo]["texto"] = base + " " + texto_largo
+                    else:
+                        partidas[codigo]["texto"] = texto_largo
 
-            descomp_por_codigo[cod_padre].append(
+        # ~D|... lo podríamos usar para descomposición, pero de momento lo dejamos fuera
+        # porque ya tienes bastante con detectar las partidas.
+
+    df = pd.DataFrame(list(partidas.values()))
+    return df
+
+
+def parse_arquimedes(text: str) -> pd.DataFrame:
+    partidas = []
+
+    for line in text.splitlines():
+        parts = line.split(";")
+        if len(parts) < 6:
+            continue
+
+        tipo = parts[0].strip().upper()
+
+        if tipo == "L":  # Partida
+            try:
+                cantidad = float(parts[4].replace(",", "."))
+            except ValueError:
+                cantidad = 0.0
+            try:
+                precio = float(parts[5].replace(",", "."))
+            except ValueError:
+                precio = 0.0
+
+            partidas.append(
                 {
-                    "tipo": tipo_comp,
-                    "descripcion": desc,
-                    "cantidad": cant,
-                    "precio": prec,
+                    "codigo": parts[1].strip(),
+                    "texto": parts[2].strip(),
+                    "unidad": parts[3].strip(),
+                    "cantidad": cantidad,
+                    "precio": precio,
+                    "importe": cantidad * precio,
+                    "descomp_materiales": [],
+                    "descomp_mano_obra": [],
+                    "descomp_maquinaria": [],
                 }
             )
 
-    # Vincular descomposición a partidas
-    partidas_por_codigo = {p["codigo"]: p for p in partidas}
-    for cod, comps in descomp_por_codigo.items():
-        if cod not in partidas_por_codigo:
-            continue
-        mat = []
-        mo = []
-        maq = []
-        for c in comps:
-            if c["tipo"] in ("M", "MAT", "MATERIAL"):
-                mat.append(c)
-            elif c["tipo"] in ("MO", "MANO", "MANO_OBRA"):
-                mo.append(c)
-            elif c["tipo"] in ("MAQ", "MAQUINARIA"):
-                maq.append(c)
-        partidas_por_codigo[cod]["descomp_materiales"] = mat
-        partidas_por_codigo[cod]["descomp_mano_obra"] = mo
-        partidas_por_codigo[cod]["descomp_maquinaria"] = maq
+    return pd.DataFrame(partidas)
 
-    df = pd.DataFrame(partidas)
-    if df.empty:
-        st.warning("No se han detectado partidas en el BC3. Revisa el formato o ajusta el parser.")
-    return df
+
+def parse_cype(text: str) -> pd.DataFrame:
+    partidas = []
+
+    for line in text.splitlines():
+        parts = line.split("|")
+        if len(parts) < 8:
+            continue
+
+        tipo = parts[1].strip().upper()
+        if tipo == "P":  # Partida
+            try:
+                cantidad = float(parts[5].replace(",", "."))
+            except ValueError:
+                cantidad = 0.0
+            try:
+                precio = float(parts[6].replace(",", "."))
+            except ValueError:
+                precio = 0.0
+            try:
+                importe = float(parts[7].replace(",", "."))
+            except ValueError:
+                importe = cantidad * precio
+
+            partidas.append(
+                {
+                    "codigo": parts[2].strip(),
+                    "texto": parts[3].strip(),
+                    "unidad": parts[4].strip(),
+                    "cantidad": cantidad,
+                    "precio": precio,
+                    "importe": importe,
+                    "descomp_materiales": [],
+                    "descomp_mano_obra": [],
+                    "descomp_maquinaria": [],
+                }
+            )
+
+    return pd.DataFrame(partidas)
+
+
+def parse_xml(text: str) -> pd.DataFrame:
+    partidas = []
+    try:
+        root = ET.fromstring(text)
+    except Exception:
+        return pd.DataFrame()
+
+    for item in root.findall(".//ITEM"):
+        codigo = item.findtext("CODE", "").strip()
+        texto = item.findtext("DESC", "").strip()
+        unidad = item.findtext("UNIT", "").strip()
+        try:
+            cantidad = float(item.findtext("QTY", "0").replace(",", "."))
+        except ValueError:
+            cantidad = 0.0
+        try:
+            precio = float(item.findtext("PRICE", "0").replace(",", "."))
+        except ValueError:
+            precio = 0.0
+        importe = cantidad * precio
+
+        partidas.append(
+            {
+                "codigo": codigo,
+                "texto": texto,
+                "unidad": unidad,
+                "cantidad": cantidad,
+                "precio": precio,
+                "importe": importe,
+                "descomp_materiales": [],
+                "descomp_mano_obra": [],
+                "descomp_maquinaria": [],
+            }
+        )
+
+    return pd.DataFrame(partidas)
+
+
+def parse_bc3_auto(file_bytes: bytes) -> pd.DataFrame:
+    text = file_bytes.decode("latin-1", errors="ignore")
+    fmt = detectar_formato_bc3(text)
+
+    if fmt == "presto":
+        return parse_presto(text)
+    if fmt == "arquimedes":
+        return parse_arquimedes(text)
+    if fmt == "cype":
+        return parse_cype(text)
+    if fmt == "xml":
+        return parse_xml(text)
+
+    raise ValueError("Formato BC3 no reconocido. Ajustar detector o parser.")
 
 
 # =========================
@@ -137,36 +244,32 @@ def detectar_partidas_alzadas(row) -> bool:
         return True
     if str(row["unidad"]).lower() in ["alzada", "global", "servicio", "trabajo"]:
         return True
-    if "completa" in str(row["texto"]).lower():
+    if "partida alzada" in str(row["texto"]).lower():
         return True
     return False
 
 
 def detectar_partidas_incompletas(row) -> bool:
-    # MVP: si no hay mano de obra ni maquinaria y el tipo de partida lo requiere
     texto = str(row["texto"]).lower()
-    mo = row["descomp_mano_obra"]
-    maq = row["descomp_maquinaria"]
+    mo = row.get("descomp_mano_obra", [])
     if any(k in texto for k in ["instalación", "montaje", "suministro e instalación"]):
         if len(mo) == 0:
             return True
-    # Podrías añadir reglas por tipo (tubería, cuadro, split, etc.)
     return False
 
 
 def detectar_elementos_sobrantes(row) -> bool:
     texto = str(row["texto"]).lower()
-    # Ejemplos típicos: rozas dentro de tubería, cableado dentro de cuadro, etc.
-    if "tubería" in texto and any("roza" in c["descripcion"].lower() for c in row["descomp_mano_obra"] + row["descomp_materiales"]):
+    comps = row.get("descomp_mano_obra", []) + row.get("descomp_materiales", [])
+    if "tubería" in texto and any("roza" in c.get("descripcion", "").lower() for c in comps):
         return True
-    if "cuadro" in texto and any("cable" in c["descripcion"].lower() for c in row["descomp_materiales"]):
+    if "cuadro" in texto and any("cable" in c.get("descripcion", "").lower() for c in comps):
         return True
     return False
 
 
 def detectar_debe_dividirse(row) -> bool:
     texto = str(row["texto"]).lower()
-    # Mezcla de conceptos típicos
     patrones = [
         ("cuadro", "cable"),
         ("cuadro", "mecanismo"),
@@ -182,14 +285,14 @@ def detectar_debe_dividirse(row) -> bool:
 
 
 def detectar_sin_medicion(row) -> bool:
-    return row["cantidad"] == 0
+    return float(row["cantidad"]) == 0.0
 
 
 def detectar_sin_descomposicion(row) -> bool:
     return (
-        len(row["descomp_materiales"]) == 0
-        and len(row["descomp_mano_obra"]) == 0
-        and len(row["descomp_maquinaria"]) == 0
+        len(row.get("descomp_materiales", [])) == 0
+        and len(row.get("descomp_mano_obra", [])) == 0
+        and len(row.get("descomp_maquinaria", [])) == 0
     )
 
 
@@ -198,18 +301,21 @@ def detectar_sin_texto(row) -> bool:
 
 
 def detectar_duplicadas(df: pd.DataFrame) -> pd.Series:
-    # Duplicadas por texto + unidad + precio
-    clave = df["texto"].str.lower().fillna("") + "|" + df["unidad"].str.lower().fillna("") + "|" + df["precio"].astype(str)
+    clave = (
+        df["texto"].fillna("").str.lower()
+        + "|"
+        + df["unidad"].fillna("").str.lower()
+        + "|"
+        + df["precio"].fillna(0).astype(str)
+    )
     return clave.duplicated(keep=False)
 
 
 def detectar_contradictorias(df: pd.DataFrame) -> pd.Series:
-    # MVP: detecta materiales contradictorios por texto (multicapa vs cobre, etc.)
     contrad = pd.Series(False, index=df.index)
-    textos = df["texto"].str.lower().fillna("")
+    textos = df["texto"].fillna("").str.lower()
     multicapa = textos.str.contains("multicapa")
     cobre = textos.str.contains("cobre")
-    # Si en el mismo presupuesto hay ambas para la misma familia (ej. "tubería")
     tuberia = textos.str.contains("tubería")
     mask_multi = tuberia & multicapa
     mask_cobre = tuberia & cobre
@@ -219,7 +325,6 @@ def detectar_contradictorias(df: pd.DataFrame) -> pd.Series:
 
 
 def extraer_sistemas_desde_actuaciones(doc_text: str) -> list:
-    # MVP: busca palabras clave de sistemas
     sistemas = []
     claves = ["electricidad", "clima", "climatización", "pci", "fontanería", "saneamiento", "ventilación"]
     for c in claves:
@@ -228,33 +333,21 @@ def extraer_sistemas_desde_actuaciones(doc_text: str) -> list:
     return list(set(sistemas))
 
 
-def detectar_faltantes_segun_actuaciones(df: pd.DataFrame, doc_text: str) -> pd.Series:
-    """
-    MVP: si en actuaciones aparece un sistema y no hay ninguna partida que lo mencione, marcamos faltante.
-    Devuelve una serie booleana por partida, pero el concepto de "faltante" es global;
-    aquí marcamos todas las filas como False y dejamos la info en un texto aparte.
-    """
+def detectar_faltantes_segun_actuaciones(df: pd.DataFrame, doc_text: str):
     sistemas = extraer_sistemas_desde_actuaciones(doc_text)
-    textos = df["texto"].str.lower().fillna("")
+    textos = df["texto"].fillna("").str.lower()
     faltantes = []
     for s in sistemas:
         if not textos.str.contains(s).any():
             faltantes.append(s)
-    # Para el MVP, devolvemos False en todas las filas y mostramos los sistemas faltantes en el panel lateral.
     serie = pd.Series(False, index=df.index)
     return serie, faltantes
 
 
 def detectar_precios_bajos(df: pd.DataFrame) -> pd.Series:
-    """
-    MVP sin conexión real a IVE/CYPE/comerciales:
-    - Marca como sospechosamente bajo si precio < 5 €
-    - O si precio < 50% de la mediana de partidas similares por texto.
-    """
     precios = df["precio"].fillna(0)
     sospechoso = precios < 5
 
-    # Comparación simple por familia de texto (ej. "tubería", "cable", "detector")
     familias = {
         "tubería": df["texto"].str.contains("tubería", case=False, na=False),
         "cable": df["texto"].str.contains("cable", case=False, na=False),
@@ -270,40 +363,29 @@ def detectar_precios_bajos(df: pd.DataFrame) -> pd.Series:
 
 
 def detectar_mano_obra_irreal(row) -> bool:
-    """
-    MVP: si hay mano de obra pero con cantidades ridículas (<0.01 h por unidad),
-    o si el texto implica instalación y no hay mano de obra.
-    """
     texto = str(row["texto"]).lower()
-    mo = row["descomp_mano_obra"]
+    mo = row.get("descomp_mano_obra", [])
 
     if any(k in texto for k in ["instalación", "montaje", "suministro e instalación"]):
         if len(mo) == 0:
             return True
 
     for c in mo:
-        if c["cantidad"] < 0.01:
+        if c.get("cantidad", 0) < 0.01:
             return True
 
     return False
 
 
 def detectar_partidas_criticas_coste(df: pd.DataFrame) -> pd.Series:
-    """
-    Marca como críticas:
-      - importe > 5000 €
-      - o importe > 10% del capítulo (MVP: del total)
-      - o combinación precio bajo + cantidad alta
-    """
     importe = df["importe"].fillna(df["cantidad"] * df["precio"])
-    total = importe.sum() if len(df) else 0
+    total = float(importe.sum()) if len(df) else 0.0
     crit = pd.Series(False, index=df.index)
 
     crit |= importe > 5000
     if total > 0:
         crit |= importe > 0.1 * total
 
-    # combinación peligrosa: precio bajo + cantidad alta
     crit |= (df["precio"] < 5) & (df["cantidad"] > 100)
 
     return crit
@@ -317,7 +399,7 @@ st.title("Auditor de presupuestos de obra (instalaciones)")
 
 st.markdown(
     """
-Herramienta para analizar un **BC3** y detectar:
+Analiza un **BC3** y detecta:
 
 - Partidas alzadas  
 - Partidas incompletas  
@@ -357,11 +439,20 @@ if bc3_file is None:
     st.info("Sube un BC3 para empezar el análisis.")
     st.stop()
 
-df = parse_bc3(bc3_file.read())
-if df.empty:
+try:
+    df = parse_bc3_auto(bc3_file.read())
+except ValueError as e:
+    st.error(str(e))
     st.stop()
 
-# Aplicar análisis fila a fila
+if df.empty:
+    st.warning("No se han detectado partidas en el BC3. Revisa el formato o ajusta el parser.")
+    st.stop()
+
+for col in ["codigo", "texto", "unidad", "cantidad", "precio", "importe"]:
+    if col not in df.columns:
+        df[col] = "" if col in ["codigo", "texto", "unidad"] else 0.0
+
 df["alzada"] = df.apply(detectar_partidas_alzadas, axis=1)
 df["incompleta"] = df.apply(detectar_partidas_incompletas, axis=1)
 df["sobran_elementos"] = df.apply(detectar_elementos_sobrantes, axis=1)
@@ -373,18 +464,15 @@ df["precio_bajo"] = detectar_precios_bajos(df)
 df["mo_irreal"] = df.apply(detectar_mano_obra_irreal, axis=1)
 df["critica_coste"] = detectar_partidas_criticas_coste(df)
 
-# Duplicadas y contradictorias
 df["duplicada"] = detectar_duplicadas(df)
 df["contradictoria"] = detectar_contradictorias(df)
 
-# Faltantes según actuaciones
 if doc_text:
     serie_faltantes, faltantes_global = detectar_faltantes_segun_actuaciones(df, doc_text)
     df["faltante_segun_actuaciones"] = serie_faltantes
 else:
     df["faltante_segun_actuaciones"] = False
 
-# Panel lateral de resumen
 with st.sidebar:
     st.header("Resumen de alertas")
 
@@ -409,7 +497,6 @@ with st.sidebar:
         for s in faltantes_global:
             st.write(f"- {s}")
 
-# Filtros
 st.subheader("Filtros de visualización")
 
 cols_alertas = [
@@ -441,7 +528,6 @@ if alerta_sel:
         mask |= df_view[c]
     df_view = df_view[mask]
 
-# Mostrar tabla
 st.subheader("Partidas analizadas")
 
 cols_mostrar = [
