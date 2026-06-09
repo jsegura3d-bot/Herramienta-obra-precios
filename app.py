@@ -189,7 +189,7 @@ def parse_xml(text: str) -> pd.DataFrame:
         except ValueError:
             cantidad = 0.0
         try:
-            precio = float(item.findtext("PRICE", "0").replace(",", ".")) 
+            precio = float(item.findtext("PRICE", "0").replace(",", "."))
         except ValueError:
             precio = 0.0
         importe = cantidad * precio
@@ -224,14 +224,109 @@ def parse_bc3_auto(file_bytes: bytes) -> pd.DataFrame:
     if fmt == "xml":
         return parse_xml(text)
 
-    raise ValueError("Formato BC3 no reconocido. Ajustar detector o parser.")
+    raise ValueError("Formato BC3 no reconocido.")
+
+
+# =========================
+# CAPÍTULOS Y JERARQUÍA
+# =========================
+
+def detectar_capitulos(text):
+    capitulos = {}
+    for line in text.splitlines():
+        if line.startswith("~C|"):
+            parts = line.split("|")
+            codigo = parts[1].strip()
+            texto = parts[3].strip() if len(parts) > 3 else ""
+            if codigo.endswith("#"):
+                capitulos[codigo] = texto
+    return capitulos
+
+
+def asignar_capitulo_a_partidas(df, capitulos):
+    for idx, row in df.iterrows():
+        codigo = row["codigo"]
+        padre = codigo[:3] + "#"
+        df.at[idx, "capitulo"] = padre
+        df.at[idx, "capitulo_nombre"] = capitulos.get(padre, "SIN CAPÍTULO")
+    return df
+
+
+def detectar_sistema(texto):
+    t = texto.lower()
+    reglas = {
+        "BT": ["cuadro", "magnetotérmico", "diferencial", "eléctrica", "mecanismo"],
+        "SANEAMIENTO": ["saneamiento", "pozo", "arqueta", "tubería pvc", "drenaje"],
+        "FONTANERÍA": ["fontanería", "tubería", "grifo", "lavabo"],
+        "PCI": ["bie", "extintor", "detector", "rociador"],
+        "CLIMA": ["clima", "climatización", "split", "conducto"],
+        "VENTILACIÓN": ["ventilación", "extractor"],
+    }
+    for sistema, palabras in reglas.items():
+        if any(p in t for p in palabras):
+            return sistema
+    return "GENERAL"
+
+
+def expandir_componentes(df):
+    filas = []
+
+    for _, row in df.iterrows():
+        filas.append({**row, "tipo": "partida", "padre": None})
+
+        for comp in row["descomp_materiales"]:
+            filas.append({
+                "codigo": comp["codigo"],
+                "texto": f"Componente de {row['codigo']}",
+                "unidad": "",
+                "cantidad": comp["cantidad"],
+                "precio": 0.0,
+                "importe": 0.0,
+                "descomp_materiales": [],
+                "descomp_mano_obra": [],
+                "descomp_maquinaria": [],
+                "capitulo": row["capitulo"],
+                "capitulo_nombre": row["capitulo_nombre"],
+                "sistema": row.get("sistema", "GENERAL"),
+                "tipo": "componente",
+                "padre": row["codigo"],
+            })
+
+    return pd.DataFrame(filas)
+
+
+def numeracion_tipo_B(df):
+    numeraciones = {}
+
+    # 1) Capítulos en orden de aparición
+    capitulos_unicos = list(df["capitulo"].unique())
+    mapa_capitulos = {cap: i+1 for i, cap in enumerate(capitulos_unicos)}
+
+    # 2) Partidas
+    for cap in capitulos_unicos:
+        cap_num = mapa_capitulos[cap]
+        subdf = df[(df["capitulo"] == cap) & (df["tipo"] == "partida")]
+        subdf = subdf.sort_values("codigo")
+
+        for i, (idx, row) in enumerate(subdf.iterrows(), start=1):
+            numeraciones[row["codigo"]] = f"{cap_num}.{i}"
+
+    # 3) Componentes
+    for padre in df["padre"].dropna().unique():
+        hijos = df[df["padre"] == padre]
+        base = numeraciones.get(padre, "0")
+
+        for j, (idx, row) in enumerate(hijos.iterrows(), start=1):
+            numeraciones[row["codigo"]] = f"{base}.{j}"
+
+    df["numeracion"] = df["codigo"].apply(lambda c: numeraciones.get(c, ""))
+    return df
 
 
 # =========================
 # MÓDULOS DE ANÁLISIS (13)
 # =========================
-# (Aquí va tu bloque completo, sin tocar nada)
-# Ya lo pegaste entero y funciona perfecto.
+# (Tu bloque completo de análisis va aquí sin cambios)
 
 
 # =========================
@@ -255,21 +350,23 @@ if docx_file is not None:
         doc = docx_lib.Document(docx_file)
         doc_text = "\n".join(p.text for p in doc.paragraphs)
     except Exception:
-        st.warning("No se ha podido leer el DOCX. Se omite el análisis de actuaciones.")
+        st.warning("No se ha podido leer el DOCX.")
 
 if bc3_file is None:
-    st.info("Sube un BC3 para empezar el análisis.")
+    st.info("Sube un BC3 para empezar.")
     st.stop()
 
-try:
-    df = parse_bc3_auto(bc3_file.read())
-except ValueError as e:
-    st.error(str(e))
-    st.stop()
+raw_text = bc3_file.read().decode("latin-1", errors="ignore")
 
-if df.empty:
-    st.warning("No se han detectado partidas en el BC3. Revisa el formato o ajusta el parser.")
-    st.stop()
+df = parse_bc3_auto(raw_text.encode("latin-1"))
+
+capitulos = detectar_capitulos(raw_text)
+df = asignar_capitulo_a_partidas(df, capitulos)
+
+df["sistema"] = df["texto"].apply(detectar_sistema)
+
+df = expandir_componentes(df)
+df = numeracion_tipo_B(df)
 
 # (Aquí siguen tus 13 análisis, sin tocar nada)
 
@@ -278,8 +375,10 @@ if df.empty:
 # =========================
 
 cols_mostrar = [
+    "numeracion",
     "codigo",
     "texto",
+    "capitulo_nombre",
     "unidad",
     "cantidad",
     "precio",
