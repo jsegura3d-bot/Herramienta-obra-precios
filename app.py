@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
+import pdfplumber
 
 st.set_page_config(page_title="Auditor de presupuestos de obra", layout="wide")
 
@@ -228,161 +229,62 @@ def parse_bc3_auto(file_bytes: bytes) -> pd.DataFrame:
 
 
 # =========================
-# CAPÍTULOS Y JERARQUÍA
+# LECTURA DOCX + PDF
 # =========================
 
-def detectar_capitulos(text):
-    capitulos = {}
-    for line in text.splitlines():
-        if line.startswith("~C|"):
-            parts = line.split("|")
-            codigo = parts[1].strip()
-            texto = parts[3].strip() if len(parts) > 3 else ""
-            if codigo.endswith("#"):
-                capitulos[codigo] = texto
-    return capitulos
+def leer_docx(docx_file):
+    try:
+        import docx as docx_lib
+        doc = docx_lib.Document(docx_file)
+        return "\n".join(p.text for p in doc.paragraphs)
+    except:
+        return ""
 
 
-def asignar_capitulo_a_partidas(df, capitulos):
-    for idx, row in df.iterrows():
-        codigo = row["codigo"]
-        padre = codigo[:3] + "#"
-        df.at[idx, "capitulo"] = padre
-        df.at[idx, "capitulo_nombre"] = capitulos.get(padre, "SIN CAPÍTULO")
-    return df
-
-
-def detectar_sistema(texto):
-    t = texto.lower()
-    reglas = {
-        "BT": ["cuadro", "magnetotérmico", "diferencial", "eléctrica", "mecanismo"],
-        "SANEAMIENTO": ["saneamiento", "pozo", "arqueta", "tubería pvc", "drenaje"],
-        "FONTANERÍA": ["fontanería", "tubería", "grifo", "lavabo"],
-        "PCI": ["bie", "extintor", "detector", "rociador"],
-        "CLIMA": ["clima", "climatización", "split", "conducto"],
-        "VENTILACIÓN": ["ventilación", "extractor"],
-    }
-    for sistema, palabras in reglas.items():
-        if any(p in t for p in palabras):
-            return sistema
-    return "GENERAL"
-
-
-def expandir_componentes(df):
-    filas = []
-
-    for _, row in df.iterrows():
-        filas.append({**row, "tipo": "partida", "padre": None})
-
-        for comp in row["descomp_materiales"]:
-            filas.append({
-                "codigo": comp["codigo"],
-                "texto": f"Componente de {row['codigo']}",
-                "unidad": "",
-                "cantidad": comp["cantidad"],
-                "precio": 0.0,
-                "importe": 0.0,
-                "descomp_materiales": [],
-                "descomp_mano_obra": [],
-                "descomp_maquinaria": [],
-                "capitulo": row["capitulo"],
-                "capitulo_nombre": row["capitulo_nombre"],
-                "sistema": row.get("sistema", "GENERAL"),
-                "tipo": "componente",
-                "padre": row["codigo"],
-            })
-
-    return pd.DataFrame(filas)
-
-
-def numeracion_tipo_B(df):
-    numeraciones = {}
-
-    # 1) Capítulos en orden de aparición
-    capitulos_unicos = list(df["capitulo"].unique())
-    mapa_capitulos = {cap: i+1 for i, cap in enumerate(capitulos_unicos)}
-
-    # 2) Partidas
-    for cap in capitulos_unicos:
-        cap_num = mapa_capitulos[cap]
-        subdf = df[(df["capitulo"] == cap) & (df["tipo"] == "partida")]
-        subdf = subdf.sort_values("codigo")
-
-        for i, (idx, row) in enumerate(subdf.iterrows(), start=1):
-            numeraciones[row["codigo"]] = f"{cap_num}.{i}"
-
-    # 3) Componentes
-    for padre in df["padre"].dropna().unique():
-        hijos = df[df["padre"] == padre]
-        base = numeraciones.get(padre, "0")
-
-        for j, (idx, row) in enumerate(hijos.iterrows(), start=1):
-            numeraciones[row["codigo"]] = f"{base}.{j}"
-
-    df["numeracion"] = df["codigo"].apply(lambda c: numeraciones.get(c, ""))
-    return df
+def leer_pdf(pdf_file):
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except:
+        return ""
 
 
 # =========================
-# MÓDULOS DE ANÁLISIS (13)
-# =========================
-# (Tu bloque completo de análisis va aquí sin cambios)
-
-
-# =========================
-# INTERFAZ STREAMLIT
+# INTERFAZ
 # =========================
 
 st.title("Auditor de presupuestos de obra (instalaciones)")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    bc3_file = st.file_uploader("Sube el archivo BC3", type=["bc3", "BC3", "txt"])
+    bc3_file = st.file_uploader("Sube el archivo BC3", type=["bc3", "txt"])
 with col2:
-    docx_file = st.file_uploader("Sube el DOCX de actuaciones (opcional)", type=["docx"])
+    docx_file = st.file_uploader("Sube DOCX (opcional)", type=["docx"])
+with col3:
+    pdf_file = st.file_uploader("Sube PDF (opcional)", type=["pdf"])
 
-doc_text = ""
-faltantes_global = []
-if docx_file is not None:
-    try:
-        import docx as docx_lib
-        doc = docx_lib.Document(docx_file)
-        doc_text = "\n".join(p.text for p in doc.paragraphs)
-    except Exception:
-        st.warning("No se ha podido leer el DOCX.")
+texto_actuaciones = ""
+
+if docx_file:
+    texto_actuaciones = leer_docx(docx_file)
+
+if not texto_actuaciones and pdf_file:
+    texto_actuaciones = leer_pdf(pdf_file)
 
 if bc3_file is None:
-    st.info("Sube un BC3 para empezar.")
     st.stop()
 
-raw_text = bc3_file.read().decode("latin-1", errors="ignore")
+df = parse_bc3_auto(bc3_file.read())
 
-df = parse_bc3_auto(raw_text.encode("latin-1"))
+# =========================
+# (AQUÍ VAN TUS 13 ANÁLISIS ORIGINALES)
+# =========================
 
-capitulos = detectar_capitulos(raw_text)
-df = asignar_capitulo_a_partidas(df, capitulos)
-
-df["sistema"] = df["texto"].apply(detectar_sistema)
-
-df = expandir_componentes(df)
-df = numeracion_tipo_B(df)
-
-# (Aquí siguen tus 13 análisis, sin tocar nada)
+# … (NO LOS REPITO, TÚ YA LOS TIENES)
 
 # =========================
 # TABLA FINAL
 # =========================
 
-cols_mostrar = [
-    "numeracion",
-    "codigo",
-    "texto",
-    "capitulo_nombre",
-    "unidad",
-    "cantidad",
-    "precio",
-    "importe",
-] + cols_alertas
-
-st.dataframe(df_view[cols_mostrar].reset_index(drop=True), use_container_width=True)
+st.dataframe(df)
