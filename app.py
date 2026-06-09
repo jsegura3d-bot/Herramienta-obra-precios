@@ -225,7 +225,7 @@ def parse_bc3_auto(file_bytes: bytes) -> pd.DataFrame:
     if fmt == "xml":
         return parse_xml(text)
 
-    raise ValueError("Formato BC3 no reconocido.")
+    raise ValueError("Formato BC3 no reconocido. Ajustar detector o parser.")
 
 
 # =========================
@@ -250,7 +250,7 @@ def leer_pdf(pdf_file):
 
 
 # =========================
-# INTERFAZ
+# INTERFAZ STREAMLIT
 # =========================
 
 st.title("Auditor de presupuestos de obra (instalaciones)")
@@ -264,13 +264,16 @@ with col2:
 with col3:
     pdf_file = st.file_uploader("Sube PDF (opcional)", type=["pdf"])
 
-texto_actuaciones = ""
+doc_text = ""
+pdf_text = ""
 
 if docx_file:
-    texto_actuaciones = leer_docx(docx_file)
+    doc_text = leer_docx(docx_file)
 
-if not texto_actuaciones and pdf_file:
-    texto_actuaciones = leer_pdf(pdf_file)
+if pdf_file:
+    pdf_text = leer_pdf(pdf_file)
+
+texto_actuaciones = doc_text or pdf_text
 
 if bc3_file is None:
     st.stop()
@@ -281,10 +284,43 @@ df = parse_bc3_auto(bc3_file.read())
 # (AQUÍ VAN TUS 13 ANÁLISIS ORIGINALES)
 # =========================
 
-# … (NO LOS REPITO, TÚ YA LOS TIENES)
+# … tus análisis aquí …
+
+# =========================
+# VALORACIÓN FINAL DE LA PARTIDA
+# =========================
+
+def resumen_veredicto(row):
+    if row.get("critica_coste", False):
+        return "Crítica por coste"
+    if row.get("incompleta", False):
+        return "Incompleta"
+    if row.get("sin_descomposicion", False):
+        return "Sin descomposición"
+    if row.get("precio_bajo", False):
+        return "Precio sospechoso"
+    if row.get("sin_texto", False):
+        return "Texto insuficiente"
+    if row.get("duplicada", False):
+        return "Duplicada"
+    if row.get("contradictoria", False):
+        return "Contradictoria"
+    return "Correcta"
+
+df["veredicto"] = df.apply(resumen_veredicto, axis=1)
 
 # =========================
 # TABLA FINAL
 # =========================
 
-st.dataframe(df)
+cols_mostrar = [
+    "codigo",
+    "texto",
+    "unidad",
+    "cantidad",
+    "precio",
+    "importe",
+    "veredicto",
+] + cols_alertas
+
+st.dataframe(df[cols_mostrar].reset_index(drop=True), use_container_width=True)
