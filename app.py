@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Auditor de presupuestos de obra", layout="wide")
 
+
 # =========================
 # PARSER UNIVERSAL BC3
 # =========================
@@ -12,15 +13,19 @@ def detectar_formato_bc3(text: str) -> str:
     lines = text.splitlines()
     sample = lines[:200]
 
+    # Presto (~V|, ~C|, ~D|, ~T|)
     if any(l.startswith("~V|") for l in sample) and any(l.startswith("~C|") for l in sample):
         return "presto"
 
+    # Arquímedes (C;..., L;..., D;...)
     if any(l.startswith("C;") or l.startswith("L;") for l in sample):
         return "arquimedes"
 
+    # CYPE (|P| en la segunda columna)
     if any("|P|" in l for l in sample):
         return "cype"
 
+    # XML (TCQ, Menfis, etc.)
     if any("<ITEM>" in l or "<BC3" in l for l in sample):
         return "xml"
 
@@ -28,22 +33,31 @@ def detectar_formato_bc3(text: str) -> str:
 
 
 def parse_presto(text: str) -> pd.DataFrame:
+    """
+    Adaptado al formato que has pegado:
+    - ~C|codigo|unidad|texto|precio...  -> partidas
+    - ~T|codigo|texto_largo             -> texto detallado
+    - ~D|codigo_capitulo|...           -> descomposición (no la usamos aún)
+    """
     partidas = {}
     lines = text.splitlines()
 
     for line in lines:
         if line.startswith("~C|"):
             parts = line.split("|")
+            # Ejemplos:
+            # ~C|001#||DEMOLICIONES|5463.96|...
+            # ~C|002001|Ud|Verificación/reparación instalación eléctrica|909.28|...
             if len(parts) >= 5:
                 codigo = parts[1].strip()
                 unidad = parts[2].strip()
                 texto = parts[3].strip()
-
                 try:
                     precio = float(parts[4].replace(",", "."))
                 except ValueError:
                     precio = 0.0
 
+                # Para partidas tipo Ud, tomamos cantidad=1 y importe=precio (MVP)
                 cantidad = 1.0
                 importe = precio
 
@@ -61,14 +75,23 @@ def parse_presto(text: str) -> pd.DataFrame:
 
         elif line.startswith("~T|"):
             parts = line.split("|")
+            # ~T|002001|Texto largo...
             if len(parts) >= 3:
                 codigo = parts[1].strip()
                 texto_largo = parts[2].strip()
                 if codigo in partidas:
+                    # concatenamos texto corto + texto largo
                     base = partidas[codigo]["texto"]
-                    partidas[codigo]["texto"] = (base + " " + texto_largo).strip()
+                    if base:
+                        partidas[codigo]["texto"] = base + " " + texto_largo
+                    else:
+                        partidas[codigo]["texto"] = texto_largo
 
-    return pd.DataFrame(list(partidas.values()))
+        # ~D|... lo podríamos usar para descomposición, pero de momento lo dejamos fuera
+        # porque ya tienes bastante con detectar las partidas.
+
+    df = pd.DataFrame(list(partidas.values()))
+    return df
 
 
 def parse_arquimedes(text: str) -> pd.DataFrame:
@@ -81,12 +104,11 @@ def parse_arquimedes(text: str) -> pd.DataFrame:
 
         tipo = parts[0].strip().upper()
 
-        if tipo == "L":
+        if tipo == "L":  # Partida
             try:
                 cantidad = float(parts[4].replace(",", "."))
             except ValueError:
                 cantidad = 0.0
-
             try:
                 precio = float(parts[5].replace(",", "."))
             except ValueError:
@@ -118,17 +140,15 @@ def parse_cype(text: str) -> pd.DataFrame:
             continue
 
         tipo = parts[1].strip().upper()
-        if tipo == "P":
+        if tipo == "P":  # Partida
             try:
                 cantidad = float(parts[5].replace(",", "."))
             except ValueError:
                 cantidad = 0.0
-
             try:
                 precio = float(parts[6].replace(",", "."))
             except ValueError:
                 precio = 0.0
-
             try:
                 importe = float(parts[7].replace(",", "."))
             except ValueError:
@@ -162,17 +182,14 @@ def parse_xml(text: str) -> pd.DataFrame:
         codigo = item.findtext("CODE", "").strip()
         texto = item.findtext("DESC", "").strip()
         unidad = item.findtext("UNIT", "").strip()
-
         try:
             cantidad = float(item.findtext("QTY", "0").replace(",", "."))
         except ValueError:
             cantidad = 0.0
-
         try:
             precio = float(item.findtext("PRICE", "0").replace(",", "."))
         except ValueError:
             precio = 0.0
-
         importe = cantidad * precio
 
         partidas.append(
@@ -474,7 +491,6 @@ with st.sidebar:
     st.write(f"🔴 Precios bajos: **{count('precio_bajo')}**")
     st.write(f"🔴 Mano de obra inexistente/irreal: **{count('mo_irreal')}**")
     st.write(f"🔴 Críticas por coste: **{count('critica_coste')}**")
-    st.write(f"🔴 Faltantes según actuaciones: **{len(faltantes_global)}**")
 
     if faltantes_global:
         st.markdown("### Sistemas faltantes según actuaciones:")
@@ -488,3 +504,39 @@ cols_alertas = [
     "incompleta",
     "sobran_elementos",
     "debe_dividirse",
+    "sin_medicion",
+    "sin_descomposicion",
+    "sin_texto",
+    "duplicada",
+    "contradictoria",
+    "faltante_segun_actuaciones",
+    "precio_bajo",
+    "mo_irreal",
+    "critica_coste",
+]
+
+alerta_sel = st.multiselect(
+    "Mostrar solo partidas con estas alertas:",
+    options=cols_alertas,
+    default=[],
+)
+
+df_view = df.copy()
+if alerta_sel:
+    mask = False
+    for c in alerta_sel:
+        mask |= df_view[c]
+    df_view = df_view[mask]
+
+st.subheader("Partidas analizadas")
+
+cols_mostrar = [
+    "codigo",
+    "texto",
+    "unidad",
+    "cantidad",
+    "precio",
+    "importe",
+] + cols_alertas
+
+st.dataframe(df_view[cols_mostrar].reset_index(drop=True), use_container_width=True)
