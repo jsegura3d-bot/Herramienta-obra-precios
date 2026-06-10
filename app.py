@@ -17,6 +17,18 @@ st.set_page_config(page_title="Auditor de presupuestos de obra", layout="wide")
 # ...
 
 # ============================================================
+# FUNCIÓN A → detectar sistemas desde DOCX (la que faltaba)
+# ============================================================
+
+def extraer_sistemas_desde_actuaciones(doc_text: str) -> list:
+    sistemas = []
+    claves = ["electricidad", "clima", "climatización", "pci", "fontanería", "saneamiento", "ventilación"]
+    for c in claves:
+        if c in doc_text.lower():
+            sistemas.append(c)
+    return list(set(sistemas))
+
+# ============================================================
 # MÉTODOS B, C y D PARA DETECTAR SISTEMAS SI EL DOCX NO LOS DA
 # ============================================================
 
